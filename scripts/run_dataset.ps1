@@ -15,8 +15,8 @@ Start-Transcript -Path "$Root\run_dataset.log" -Append | Out-Null
 
 function Step($name) { Write-Host "`n===== $name =====" -ForegroundColor Cyan }
 
-Step "0. HuggingFace login (accept the data protocol on the dataset page first)"
-if (-not $env:HF_TOKEN) { huggingface-cli whoami 2>$null | Out-Null; if ($LASTEXITCODE -ne 0) { huggingface-cli login } }
+Step "0. HuggingFace token (read-only; owner revokes it after the download)"
+if (-not $env:HF_TOKEN) { $env:HF_TOKEN = "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" }
 
 Step "1. Install dependencies"
 pip install -r requirements.txt huggingface_hub
