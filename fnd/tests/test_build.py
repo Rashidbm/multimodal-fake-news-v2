@@ -52,7 +52,7 @@ def dataset(tmp_path):
 
 
 def test_balanced(dataset):
-    selected, rep = select_balanced(dataset, seed=1, image_mode="required")
+    selected, rep = select_balanced(dataset, seed=1, image_mode="required", balance="equal_scenarios")
     assert rep.target == 12                      # smallest group has 12 unique records
     assert all(rep.selected[g] == 12 for g in GROUPS)
     assert rep.images_hashed == 60 and rep.images_unverified == 0
@@ -74,7 +74,7 @@ def test_duplicate_pair_is_caught_by_content(tmp_path):
     shutil.copy(tmp_path / "genuine_0.png", tmp_path / "genuine_copy.png")
     samples.append(sample(99, "genuine", "Caption, GENUINE 0!", tmp_path / "genuine_copy.png"))
 
-    selected, rep = select_balanced(samples, seed=3, image_mode="required")
+    selected, rep = select_balanced(samples, seed=3, image_mode="required", balance="equal_scenarios")
     assert rep.available["genuine"] == 6
     assert rep.skipped_duplicate["genuine"] == 1
     assert rep.target == 5 and all(rep.selected[g] == 5 for g in GROUPS)
@@ -85,11 +85,11 @@ def test_duplicate_pair_is_caught_by_content(tmp_path):
 
 def test_target_too_high_is_an_error(dataset):
     with pytest.raises(ValueError, match="only 12 available"):
-        select_balanced(dataset, target=13, seed=1)
+        select_balanced(dataset, target=13, seed=1, balance="equal_scenarios")
 
 
 def test_shared_content_lands_in_one_split(dataset):
-    selected, _ = select_balanced(dataset, seed=1)
+    selected, _ = select_balanced(dataset, seed=1, balance="equal_scenarios")
     split_of, rep = assign_splits(selected, seed=1)
     by_id = {s.sample_id: s for s in selected}
     # same image bytes -> same split
@@ -105,17 +105,17 @@ def test_shared_content_lands_in_one_split(dataset):
 
 def test_missing_image_required_vs_optional(tmp_path, dataset):
     dataset.append(sample(50, "ooc", "ghost", tmp_path / "does_not_exist.png"))
-    _, rep = select_balanced(dataset, seed=1, image_mode="required")
+    _, rep = select_balanced(dataset, seed=1, image_mode="required", balance="equal_scenarios")
     assert rep.skipped_missing_image["ooc"] == 1
-    _, rep2 = select_balanced(dataset, seed=1, image_mode="optional")
+    _, rep2 = select_balanced(dataset, seed=1, image_mode="optional", balance="equal_scenarios")
     assert rep2.skipped_missing_image["ooc"] == 0 and rep2.images_unverified >= 1
 
 
 def test_outputs_pass_verify_and_tampering_fails(tmp_path, dataset):
-    selected, sel_rep = select_balanced(dataset, seed=1)
+    selected, sel_rep = select_balanced(dataset, seed=1, balance="equal_scenarios")
     split_of, split_rep = assign_splits(selected, seed=1)
     csv_path, manifest = write_outputs(selected, split_of, tmp_path / "out", "t", sel_rep, split_rep, {})
-    assert verify_csv(csv_path, check_files=True) == []
+    assert verify_csv(csv_path, check_files=True, balance="equal_scenarios") == []
     assert manifest.is_file()
 
     # tamper: move one record of a shared-image cluster to another split -> leak must be detected
@@ -126,14 +126,35 @@ def test_outputs_pass_verify_and_tampering_fails(tmp_path, dataset):
         w = csv.DictWriter(f, fieldnames=rows[0].keys())
         w.writeheader()
         w.writerows(rows)
-    fails = verify_csv(csv_path)
+    fails = verify_csv(csv_path, balance="equal_scenarios")
     assert any("more than one split" in f for f in fails)
 
 
 def test_deterministic(dataset):
-    a, _ = select_balanced(list(dataset), seed=7)
-    b, _ = select_balanced(list(dataset), seed=7)
+    a, _ = select_balanced(list(dataset), seed=7, balance="equal_scenarios")
+    b, _ = select_balanced(list(dataset), seed=7, balance="equal_scenarios")
     assert [s.sample_id for s in a] == [s.sample_id for s in b]
     sa, _ = assign_splits(a, seed=7)
     sb, _ = assign_splits(b, seed=7)
     assert sa == sb
+
+
+def test_real_fake_balance(tmp_path):
+    """genuine gets 4 x N_fake so real == fake in total; N_fake limited by genuine // 4."""
+    samples = []
+    for gi, g in enumerate(GROUPS):
+        n = 14 if g == "genuine" else 6         # genuine // 4 = 3 < 6 -> N_fake = 3, genuine = 12
+        for i in range(n):
+            p = tmp_path / f"{g}_{i}.png"
+            make_png(p, (10 * gi + i * 3, 50 + i, 200 - i))
+            samples.append(sample(i, g, f"caption {g} {i}", p))
+    selected, rep = select_balanced(samples, seed=1, balance="real_fake")
+    assert rep.target == 3
+    assert rep.selected["genuine"] == 12 and all(rep.selected[g] == 3 for g in GROUPS if g != "genuine")
+    real = sum(1 for s in selected if s.group == "genuine")
+    fake = sum(1 for s in selected if s.group != "genuine")
+    assert real == fake == 12
+    split_of, split_rep = assign_splits(selected, seed=1)
+    csv_path, _ = write_outputs(selected, split_of, tmp_path / "out", "rf", rep, split_rep, {})
+    assert verify_csv(csv_path, check_files=True, balance="real_fake") == []
+    assert any("real != fake" in f for f in verify_csv(csv_path, balance="real_fake")) is False

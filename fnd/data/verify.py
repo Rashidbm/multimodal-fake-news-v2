@@ -25,7 +25,8 @@ def read_rows(path: str | Path) -> list[dict]:
 
 
 def verify_rows(rows: list[dict], fractions: dict[str, float] | None = None,
-                check_files: bool = False, tolerance: float = 0.03) -> list[str]:
+                check_files: bool = False, tolerance: float = 0.03,
+                balance: str = "real_fake") -> list[str]:
     fails: list[str] = []
     if not rows:
         return ["csv is empty"]
@@ -45,8 +46,14 @@ def verify_rows(rows: list[dict], fractions: dict[str, float] | None = None,
     if unknown:
         fails.append(f"unknown groups: {unknown}")
     sizes = {g: per_group.get(g, 0) for g in GROUPS}
-    if len(set(sizes.values())) != 1:
-        fails.append(f"groups are not balanced: {sizes}")
+    fake_sizes = {g: n for g, n in sizes.items() if g != "genuine"}
+    if len(set(fake_sizes.values())) != 1:
+        fails.append(f"fake scenarios are not equal: {fake_sizes}")
+    n_fake = next(iter(fake_sizes.values()))
+    if balance == "real_fake" and sizes["genuine"] != 4 * n_fake:
+        fails.append(f"real != fake: genuine {sizes['genuine']} vs fake total {4 * n_fake}")
+    if balance == "equal_scenarios" and sizes["genuine"] != n_fake:
+        fails.append(f"genuine {sizes['genuine']} != fake scenario size {n_fake}")
 
     # 3. splits are the three expected values
     splits = Counter(r["split"] for r in rows)
@@ -105,20 +112,21 @@ def verify_rows(rows: list[dict], fractions: dict[str, float] | None = None,
 
 
 def verify_csv(path: str | Path, fractions: dict[str, float] | None = None,
-               check_files: bool = False) -> list[str]:
-    return verify_rows(read_rows(path), fractions, check_files)
+               check_files: bool = False, balance: str = "real_fake") -> list[str]:
+    return verify_rows(read_rows(path), fractions, check_files, balance=balance)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Verify a built dataset CSV.")
     ap.add_argument("csv")
     ap.add_argument("--check-files", action="store_true", help="also require every image file to exist")
+    ap.add_argument("--balance", choices=["real_fake", "equal_scenarios"], default="real_fake")
     ap.add_argument("--fractions", nargs=3, type=float, default=[0.70, 0.15, 0.15],
                     metavar=("TRAIN", "VAL", "TEST"))
     args = ap.parse_args(argv)
     fractions = dict(zip(("train", "val", "test"), args.fractions))
     rows = read_rows(args.csv)
-    fails = verify_rows(rows, fractions, args.check_files)
+    fails = verify_rows(rows, fractions, args.check_files, balance=args.balance)
     per_group = Counter(r["group"] for r in rows)
     per_split = Counter(r["split"] for r in rows)
     print(f"{len(rows)} rows; per group {dict(per_group)}; per split {dict(per_split)}")

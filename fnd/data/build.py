@@ -20,6 +20,12 @@ Three stages, each with its own report so every number can be checked:
    CSV with one row per record + manifest.json with seed, counts, and
    every skipped/duplicate count.  Run fnd.data.verify on the CSV next.
 
+Balance mode (the PDF says both "real and fake samples are equal" and
+"each fake scenario contains the same number of samples"):
+   real_fake        genuine = 4 x N_fake, the four fake scenarios N_fake each,
+                    so real == fake in total.  DEFAULT.
+   equal_scenarios  all five scenarios N each (real is then 1:4 vs fake).
+
 Image mode:
    required  every image must exist and open; otherwise the record is
              skipped and counted.  Use this on the PC.
@@ -44,6 +50,20 @@ from .records import GROUPS, LABEL_INDEX, Sample
 
 SOURCE_PRIORITY = ("mmfakebench", "newsclippings", "dgm4")
 DEFAULT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
+BALANCE_MODES = ("real_fake", "equal_scenarios")
+FAKE_GROUPS = tuple(g for g in GROUPS if g != "genuine")
+
+
+def group_goals(available: dict[str, int], balance: str, target: int | None) -> dict[str, int]:
+    """How many records each group should reach.  ``target`` is N per fake
+    scenario (or per scenario in equal_scenarios mode)."""
+    if balance == "equal_scenarios":
+        n = target or min(available[g] for g in GROUPS)
+        return {g: n for g in GROUPS}
+    if balance == "real_fake":
+        n = target or min(min(available[g] for g in FAKE_GROUPS), available["genuine"] // 4)
+        return {**{g: n for g in FAKE_GROUPS}, "genuine": 4 * n}
+    raise ValueError(f"balance must be one of {BALANCE_MODES}")
 
 
 # ----------------------------------------------------------------------------
@@ -52,7 +72,8 @@ DEFAULT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
 
 @dataclass
 class SelectionReport:
-    target: int = 0                      # N actually used
+    target: int = 0                      # N per fake scenario actually used
+    balance: str = "real_fake"
     image_mode: str = "required"
     available: Counter = field(default_factory=Counter)          # per group, before selection
     selected: Counter = field(default_factory=Counter)           # per group, after
@@ -65,7 +86,8 @@ class SelectionReport:
     images_unverified: int = 0           # optional mode: keyed by path, not content
 
     def format(self) -> str:
-        lines = [f"SELECTION  target N = {self.target}   image mode = {self.image_mode}"]
+        lines = [f"SELECTION  balance = {self.balance}   N per fake scenario = {self.target}   "
+                 f"image mode = {self.image_mode}"]
         lines.append(f"  {'group':22} {'avail':>6} {'kept':>6} {'dup':>5} {'noimg':>6} {'bad':>4}   sources")
         for g in GROUPS:
             srcs = ", ".join(f"{s}={n}" for s, n in self.per_group_source[g].items())
@@ -100,25 +122,25 @@ def _order_candidates(samples: list[Sample], seed: int, priority=SOURCE_PRIORITY
 
 
 def select_balanced(samples: list[Sample], target: int | None = None, seed: int = 42,
-                    image_mode: str = "required", priority=SOURCE_PRIORITY,
-                    perceptual: bool = True) -> tuple[list[Sample], SelectionReport]:
+                    image_mode: str = "required", balance: str = "real_fake",
+                    priority=SOURCE_PRIORITY, perceptual: bool = True) -> tuple[list[Sample], SelectionReport]:
     if image_mode not in ("required", "optional"):
         raise ValueError("image_mode must be 'required' or 'optional'")
     ordered = _order_candidates(samples, seed, priority)
-    rep = SelectionReport(image_mode=image_mode)
+    rep = SelectionReport(image_mode=image_mode, balance=balance)
     for g in GROUPS:
         rep.available[g] = len(ordered[g])
     if any(rep.available[g] == 0 for g in GROUPS):
         raise ValueError(f"a group has no candidates: {dict(rep.available)}")
 
-    goal = target if target else min(rep.available[g] for g in GROUPS)
+    goals = group_goals(dict(rep.available), balance, target)
     cache = ImageInfoCache(perceptual=perceptual)
     seen_pairs: dict[tuple[str, str], str] = {}
     chosen: dict[str, list[Sample]] = {g: [] for g in GROUPS}
 
     for g in GROUPS:
         for s in ordered[g]:
-            if len(chosen[g]) >= goal:
+            if len(chosen[g]) >= goals[g]:
                 break
             tk = text_key(s.text)
             info = cache.get(s.image_path)
@@ -144,14 +166,19 @@ def select_balanced(samples: list[Sample], target: int | None = None, seed: int 
             s.extra.update(text_key=tk, image_key=ik)
             chosen[g].append(s)
 
-    n = min(len(chosen[g]) for g in GROUPS)
+    # After de-duplication some group may be short: shrink N so the balance still holds.
+    if balance == "equal_scenarios":
+        n = min(len(chosen[g]) for g in GROUPS)
+    else:
+        n = min(min(len(chosen[g]) for g in FAKE_GROUPS), len(chosen["genuine"]) // 4)
     if target and n < target:
-        raise ValueError(f"requested {target} per group but only {n} available after de-duplication: "
+        raise ValueError(f"requested {target} per fake scenario but only {n} available after de-duplication: "
                          f"{ {g: len(chosen[g]) for g in GROUPS} }")
+    final = group_goals({g: len(chosen[g]) for g in GROUPS}, balance, n)
     rep.target = n
     selected: list[Sample] = []
     for g in GROUPS:
-        chosen[g] = chosen[g][:n]          # deterministic truncation
+        chosen[g] = chosen[g][:final[g]]   # deterministic truncation
         rep.selected[g] = len(chosen[g])
         for s in chosen[g]:
             rep.per_group_source[g][s.source] += 1
@@ -296,11 +323,14 @@ def write_outputs(selected: list[Sample], split_of: dict[str, str], out_dir: str
         "git_commit": _git_commit(),
         "config": config,
         "rows": len(selected),
-        "n_per_group": sel_rep.target,
+        "balance": sel_rep.balance,
+        "n_per_fake_scenario": sel_rep.target,
+        "n_per_group": dict(sel_rep.selected),
         "warning": (None if sel_rep.image_mode == "required" else
                     "image_mode=optional: duplicates checked by caption + PATH only; do not train on this"),
         "selection": {
             "target": sel_rep.target,
+            "balance": sel_rep.balance,
             "image_mode": sel_rep.image_mode,
             "available": dict(sel_rep.available),
             "selected": dict(sel_rep.selected),
@@ -331,7 +361,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="data/processed")
     ap.add_argument("--name", default="balanced_5group")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--target", type=int, default=None, help="force N per group (default: smallest group)")
+    ap.add_argument("--balance", choices=BALANCE_MODES, default="real_fake",
+                    help="real_fake: genuine = 4 x N_fake so real == fake (default); equal_scenarios: all five = N")
+    ap.add_argument("--target", type=int, default=None, help="force N per fake scenario (default: largest possible)")
     ap.add_argument("--images", choices=["required", "optional"], default="required")
     ap.add_argument("--fractions", nargs=3, type=float, default=[0.70, 0.15, 0.15],
                     metavar=("TRAIN", "VAL", "TEST"))
@@ -342,7 +374,8 @@ def main(argv=None) -> int:
     print(load_rep.format())
     print()
 
-    selected, sel_rep = select_balanced(samples, target=args.target, seed=args.seed, image_mode=args.images)
+    selected, sel_rep = select_balanced(samples, target=args.target, seed=args.seed,
+                                        image_mode=args.images, balance=args.balance)
     print(sel_rep.format())
     print()
 
@@ -351,13 +384,14 @@ def main(argv=None) -> int:
     print(split_rep.format())
     print()
 
-    config = {"mmfakebench": str(args.mmfakebench), "seed": args.seed, "target": args.target,
-              "images": args.images, "fractions": fractions}
+    config = {"mmfakebench": str(args.mmfakebench), "seed": args.seed, "balance": args.balance,
+              "target": args.target, "images": args.images, "fractions": fractions}
     csv_path, manifest_path = write_outputs(selected, split_of, args.out, args.name, sel_rep, split_rep, config)
     print(f"wrote {csv_path} and {manifest_path}")
 
     from .verify import verify_csv
-    failures = verify_csv(csv_path, fractions=fractions, check_files=(args.images == "required"))
+    failures = verify_csv(csv_path, fractions=fractions, check_files=(args.images == "required"),
+                          balance=args.balance)
     print("VERIFY: " + ("PASS" if not failures else "FAIL\n  " + "\n  ".join(failures)))
     return 0 if not failures else 1
 
