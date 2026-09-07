@@ -1,2 +1,5 @@
 pillow>=10
 pytest>=8
+torch>=2.2
+torchvision>=0.17
+transformers>=4.40

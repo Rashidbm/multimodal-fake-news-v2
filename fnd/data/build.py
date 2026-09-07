@@ -22,9 +22,11 @@ Three stages, each with its own report so every number can be checked:
 
 Balance mode (the PDF says both "real and fake samples are equal" and
 "each fake scenario contains the same number of samples"):
-   real_fake        genuine = 4 x N_fake, the four fake scenarios N_fake each,
-                    so real == fake in total.  DEFAULT.
-   equal_scenarios  all five scenarios N each (real is then 1:4 vs fake).
+   equal_scenarios  all five scenarios N each.  DEFAULT.  The PDF: "collect
+                    exactly 1,000 from each of the other four scenarios".
+                    Real == fake is then achieved at TRAINING time by
+                    oversampling genuine 4x ("you can oversample MMFakeBench").
+   real_fake        genuine = 4 x N_fake in the file itself (shrinks N_fake).
 
 Image mode:
    required  every image must exist and open; otherwise the record is
@@ -50,7 +52,7 @@ from .records import GROUPS, LABEL_INDEX, Sample
 
 SOURCE_PRIORITY = ("mmfakebench", "newsclippings", "dgm4")
 DEFAULT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
-BALANCE_MODES = ("real_fake", "equal_scenarios")
+BALANCE_MODES = ("equal_scenarios", "real_fake")
 FAKE_GROUPS = tuple(g for g in GROUPS if g != "genuine")
 
 
@@ -73,7 +75,7 @@ def group_goals(available: dict[str, int], balance: str, target: int | None) -> 
 @dataclass
 class SelectionReport:
     target: int = 0                      # N per fake scenario actually used
-    balance: str = "real_fake"
+    balance: str = "equal_scenarios"
     image_mode: str = "required"
     available: Counter = field(default_factory=Counter)          # per group, before selection
     selected: Counter = field(default_factory=Counter)           # per group, after
@@ -86,7 +88,8 @@ class SelectionReport:
     images_unverified: int = 0           # optional mode: keyed by path, not content
 
     def format(self) -> str:
-        lines = [f"SELECTION  balance = {self.balance}   N per fake scenario = {self.target}   "
+        per = "N per scenario" if self.balance == "equal_scenarios" else "N per fake scenario"
+        lines = [f"SELECTION  balance = {self.balance}   {per} = {self.target}   "
                  f"image mode = {self.image_mode}"]
         lines.append(f"  {'group':22} {'avail':>6} {'kept':>6} {'dup':>5} {'noimg':>6} {'bad':>4}   sources")
         for g in GROUPS:
@@ -122,7 +125,7 @@ def _order_candidates(samples: list[Sample], seed: int, priority=SOURCE_PRIORITY
 
 
 def select_balanced(samples: list[Sample], target: int | None = None, seed: int = 42,
-                    image_mode: str = "required", balance: str = "real_fake",
+                    image_mode: str = "required", balance: str = "equal_scenarios",
                     priority=SOURCE_PRIORITY, perceptual: bool = True) -> tuple[list[Sample], SelectionReport]:
     if image_mode not in ("required", "optional"):
         raise ValueError("image_mode must be 'required' or 'optional'")
@@ -361,9 +364,10 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default="data/processed")
     ap.add_argument("--name", default="balanced_5group")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--balance", choices=BALANCE_MODES, default="real_fake",
-                    help="real_fake: genuine = 4 x N_fake so real == fake (default); equal_scenarios: all five = N")
-    ap.add_argument("--target", type=int, default=None, help="force N per fake scenario (default: largest possible)")
+    ap.add_argument("--balance", choices=BALANCE_MODES, default="equal_scenarios",
+                    help="equal_scenarios: all five = N (default, real/fake balanced by oversampling at train time); "
+                         "real_fake: genuine = 4 x N_fake inside the file")
+    ap.add_argument("--target", type=int, default=None, help="force N per scenario (default: largest possible)")
     ap.add_argument("--images", choices=["required", "optional"], default="required")
     ap.add_argument("--fractions", nargs=3, type=float, default=[0.70, 0.15, 0.15],
                     metavar=("TRAIN", "VAL", "TEST"))

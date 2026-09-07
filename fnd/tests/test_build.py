@@ -157,4 +157,4 @@ def test_real_fake_balance(tmp_path):
     split_of, split_rep = assign_splits(selected, seed=1)
     csv_path, _ = write_outputs(selected, split_of, tmp_path / "out", "rf", rep, split_rep, {})
     assert verify_csv(csv_path, check_files=True, balance="real_fake") == []
-    assert any("real != fake" in f for f in verify_csv(csv_path, balance="real_fake")) is False
+    assert verify_csv(csv_path, balance="equal_scenarios") != []   # the other mode must reject it

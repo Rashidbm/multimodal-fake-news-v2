@@ -26,7 +26,7 @@ def read_rows(path: str | Path) -> list[dict]:
 
 def verify_rows(rows: list[dict], fractions: dict[str, float] | None = None,
                 check_files: bool = False, tolerance: float = 0.03,
-                balance: str = "real_fake") -> list[str]:
+                balance: str = "equal_scenarios") -> list[str]:
     fails: list[str] = []
     if not rows:
         return ["csv is empty"]
@@ -112,7 +112,7 @@ def verify_rows(rows: list[dict], fractions: dict[str, float] | None = None,
 
 
 def verify_csv(path: str | Path, fractions: dict[str, float] | None = None,
-               check_files: bool = False, balance: str = "real_fake") -> list[str]:
+               check_files: bool = False, balance: str = "equal_scenarios") -> list[str]:
     return verify_rows(read_rows(path), fractions, check_files, balance=balance)
 
 
@@ -120,7 +120,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Verify a built dataset CSV.")
     ap.add_argument("csv")
     ap.add_argument("--check-files", action="store_true", help="also require every image file to exist")
-    ap.add_argument("--balance", choices=["real_fake", "equal_scenarios"], default="real_fake")
+    ap.add_argument("--balance", choices=["equal_scenarios", "real_fake"], default="equal_scenarios")
     ap.add_argument("--fractions", nargs=3, type=float, default=[0.70, 0.15, 0.15],
                     metavar=("TRAIN", "VAL", "TEST"))
     args = ap.parse_args(argv)
