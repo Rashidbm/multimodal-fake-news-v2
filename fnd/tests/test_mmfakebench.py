@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from fnd.data.mmfakebench import classify, load_mmfakebench, subcategory
+from fnd.data.mmfakebench import FOLDER_TO_GROUP, classify, load_mmfakebench, subcategory
 from fnd.data.records import MappingError
 
 
@@ -27,49 +27,28 @@ def test_subcategory_strips_split_suffix():
     assert subcategory("/real/bbc_test_500/bbc_test_0.png") == "bbc"
 
 
-@pytest.mark.parametrize("folder,fc,ts,im,expected", [
-    ("bbc", "original", "VisualNews", "VisualNews", "genuine"),
-    ("coco", "original", "MS-COCO", "MS-COCO", "genuine"),
-    ("Newsclipings_person", "mismatch", "Newsclipings", "Newsclipings", "ooc"),
-    ("rumor_match", "textual_veracity_distortion", "Fakenewsnet", "Repurposed Image", "fake_text_real_image"),
-    ("chatgpt_match", "textual_veracity_distortion", "GPT-generated Rumor", "Repurposed Image", "fake_text_real_image"),
-    ("fever_AI", "textual_veracity_distortion", "Fever", "AI-generated Image", "fake_text_fake_image"),
-    ("llm_rewrite", "textual_veracity_distortion", "GPT-generated Rumor", "AI-generated Image", "fake_text_fake_image"),
-    ("Fakeddit_photo_edit", "visual_veracity_distortion", "Fakeddit", "Fakeddit", "real_text_fake_image"),
-    ("antifact_image_generation", "visual_veracity_distortion", "MS-COCO", "AI-generated Image", "real_text_fake_image"),
-    ("antifact_image_generation", "visual_veracity_distortion", "", "", "real_text_fake_image"),
-    ("DGM4_text_edit_senti", "mismatch", "DGM4", "DGM4", "fake_text_real_image"),
-    ("coco_image_edit", "mismatch", "COCO-Counterfactuals", "COCO-Counterfactuals", "real_text_fake_image"),
-    ("coco_text_edit", "mismatch", "COCO-Counterfactuals", "COCO-Counterfactuals", "fake_text_fake_image"),
-])
-def test_every_rule(folder, fc, ts, im, expected):
-    group, _rule = classify(rec(folder, fc, ts, im))
-    assert group == expected
+@pytest.mark.parametrize("folder,expected", sorted(FOLDER_TO_GROUP.items()))
+def test_every_folder_maps(folder, expected):
+    group, sub = classify(rec(folder, "x", "", ""))
+    assert group == expected and sub == folder
 
 
-@pytest.mark.parametrize("folder,fc,ts,im", [
-    ("x", "something_new", "VisualNews", "VisualNews"),                       # unknown fake_cls
-    ("Fakeddit_photo_edit", "visual_veracity_distortion", "Fever", "Fakeddit"),  # visual but text is a rumour
-    ("bbc", "original", "Fever", "Fever"),                                    # original but rumour source
-    ("fever_AI", "textual_veracity_distortion", "VisualNews", "AI-generated Image"),  # textual but real source
-    ("fever_AI", "textual_veracity_distortion", "Fever", "Something Else"),   # unexpected image source
-    ("weird", "mismatch", "COCO-Counterfactuals", "COCO-Counterfactuals"),    # COCO folder we don't know
-    ("other", "visual_veracity_distortion", "", ""),                          # blank sources outside antifact
-])
-def test_unexpected_records_are_rejected(folder, fc, ts, im):
-    with pytest.raises(MappingError):
-        classify(rec(folder, fc, ts, im))
+def test_unknown_folder_is_rejected():
+    with pytest.raises(MappingError, match="not in FOLDER_TO_GROUP"):
+        classify(rec("some_new_folder", "mismatch", "", ""))
 
 
-def test_folder_consistency_check(tmp_path):
-    # Two records in the same folder that map to different groups -> loader must refuse.
-    records = [
-        rec("fever_AI", "textual_veracity_distortion", "Fever", "AI-generated Image"),
-        rec("fever_AI", "textual_veracity_distortion", "Fever", "Repurposed Image"),
-    ]
-    (tmp_path / "MMFakeBench_val.json").write_text(json.dumps(records))
-    with pytest.raises(MappingError, match="more than one group"):
-        load_mmfakebench(tmp_path, splits=("val",))
+def test_table_covers_five_groups():
+    from fnd.data.records import GROUPS
+    assert set(FOLDER_TO_GROUP.values()) == set(GROUPS)
+
+
+def test_paper_totals_check(tmp_path):
+    # 1 val + 1 test record only -> totals differ from the paper -> loader refuses.
+    (tmp_path / "MMFakeBench_val.json").write_text(json.dumps([rec("bbc", "original", "VisualNews", "VisualNews")]))
+    (tmp_path / "MMFakeBench_test.json").write_text(json.dumps([rec("fever_AI", "textual_veracity_distortion", "Fever", "AI-generated Image", "test")]))
+    with pytest.raises(MappingError, match="differ from the paper"):
+        load_mmfakebench(tmp_path)
 
 
 def test_loader_reports_missing_images(tmp_path):

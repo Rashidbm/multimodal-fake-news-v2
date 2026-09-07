@@ -9,29 +9,11 @@ Layout expected on disk (what ``huggingface-cli download`` produces):
 
 Each record: text, image_path, text_source, image_source, gt_answers, fake_cls.
 
-THE MAPPING RULE (agreed with the paper, arXiv 2406.08772 section 3):
-
-    fake_cls                     image_source            -> group
-    ---------------------------  ----------------------  --------------------
-    original                     (same as text_source)   genuine
-    mismatch                     Newsclipings            ooc
-    textual_veracity_distortion  Repurposed Image        fake_text_real_image
-    textual_veracity_distortion  AI-generated Image      fake_text_fake_image
-    visual_veracity_distortion   (any)                   real_text_fake_image
-    mismatch                     DGM4                    fake_text_real_image
-    mismatch                     COCO-Counterfactuals    coco_image_edit -> real_text_fake_image
-                                                         coco_text_edit  -> fake_text_fake_image
-
-Every rule ALSO checks that text_source is on the expected side (rumour
-sources for fake text, caption sources for real text).  A record that
-matches no rule, or whose text_source contradicts the rule, raises
-MappingError with the offending record.  Nothing is dropped silently.
-
-The folder name (second path component, e.g. 'fever_AI_val_100') is used
-for exactly two things: telling the two COCO-Counterfactuals folders apart,
-and accepting the 100 antifact records whose source fields are blank.
-Afterwards the loader checks that every folder mapped to ONE group only,
-and that the four fake_cls totals equal the paper's (3300/3300/1100/3300).
+THE MAPPING: one table, folder name -> scenario (FOLDER_TO_GROUP below).
+The folder is the paper's sub-category, and section 3 of the paper says what
+each sub-category is made of.  A folder not in the table stops the program.
+After mapping, the loader checks that the four fake_cls totals equal the
+paper's (3300/3300/1100/3300), proving the whole benchmark was read.
 """
 from __future__ import annotations
 
@@ -47,10 +29,28 @@ from .records import GROUPS, MappingError, Sample
 
 SOURCE = "mmfakebench"
 
-# Where the TEXT came from, according to the paper.
-REAL_TEXT_SOURCES = {"VisualNews", "Newsclipings", "Fakeddit", "MS-COCO"}
-RUMOR_TEXT_SOURCES = {"Fever", "GPT-generated Rumor", "Fakenewsnet", "Gossipcop"}
-EDITED_TEXT_SOURCES = {"DGM4", "COCO-Counterfactuals"}
+# One line per MMFakeBench sub-category (= folder name without the _val_N /
+# _test_N suffix), as defined in the paper, arXiv 2406.08772 section 3:
+#   3.2   real data: six sources                           -> genuine
+#   3.1.1 rumour text + repurposed real photo              -> fake_text_real_image
+#   3.1.1 rumour text + AI-generated image                 -> fake_text_fake_image
+#   3.1.2 real text + Photoshop / AI-generated image       -> real_text_fake_image
+#   3.1.3 repurposed inconsistency (NewsCLIPpings)         -> ooc
+#   3.1.3 edited text (DGM4 antonym swap, COCO edit)       -> fake_text_real_image / fake_text_fake_image
+#   3.1.3 edited image (COCO-Counterfactuals)              -> real_text_fake_image
+FOLDER_TO_GROUP: dict[str, str] = {
+    "bbc": "genuine", "guardian": "genuine", "usa_today": "genuine", "wash": "genuine",
+    "coco": "genuine", "fakeddit": "genuine",
+    "Newsclipings_person": "ooc", "Newsclipings_scene": "ooc", "Newsclipings_semantic": "ooc",
+    "rumor_match": "fake_text_real_image", "politicat_match": "fake_text_real_image",
+    "gossipcop_match": "fake_text_real_image", "chatgpt_match": "fake_text_real_image",
+    "DGM4_text_edit_senti": "fake_text_real_image",
+    "Fakeddit_photo_edit": "real_text_fake_image", "antifact_image_generation": "real_text_fake_image",
+    "coco_image_edit": "real_text_fake_image",
+    "fever_AI": "fake_text_fake_image", "llm_rewrite": "fake_text_fake_image",
+    "llm_gossip_md_generation": "fake_text_fake_image", "llm_science_md_generation": "fake_text_fake_image",
+    "gossipcop_midjourney": "fake_text_fake_image", "coco_text_edit": "fake_text_fake_image",
+}
 
 # Paper section 3.3: 30% textual, 10% visual, 30% cross-modal, 30% real of 11,000.
 PAPER_TOTALS = {
@@ -71,55 +71,14 @@ def subcategory(image_path: str) -> str:
     return _SUFFIX.sub("", parts[1])
 
 
-def _fail(rec: dict, why: str) -> MappingError:
-    return MappingError(f"{why}\n  record: {json.dumps(rec, ensure_ascii=False)[:400]}")
-
-
 def classify(rec: dict) -> tuple[str, str]:
-    """Return (group, rule_name) for one raw record, or raise MappingError."""
-    fc = rec.get("fake_cls", "")
-    ts = rec.get("text_source", "")
-    im = rec.get("image_source", "")
+    """Return (group, folder) for one raw record.  Unknown folder -> MappingError."""
     sub = subcategory(rec["image_path"])
-
-    if fc == "original":
-        if ts not in REAL_TEXT_SOURCES or im != ts:
-            raise _fail(rec, "original record whose sources are not a real-caption source")
-        return "genuine", "original"
-
-    if fc == "visual_veracity_distortion":
-        # Paper 3.1.2: "the text is real and the misinformation exists in the image".
-        blank_ok = (ts == "" and im == "" and sub == "antifact_image_generation")
-        if ts not in REAL_TEXT_SOURCES and not blank_ok:
-            raise _fail(rec, "visual distortion record whose text_source is not a real-caption source")
-        return "real_text_fake_image", "visual+blank" if blank_ok else "visual"
-
-    if fc == "textual_veracity_distortion":
-        # Paper 3.1.1: rumour text + supporting image that is either
-        # "AI-generated" (fake image) or "Repurposed" (real VisualNews photo).
-        if ts not in RUMOR_TEXT_SOURCES:
-            raise _fail(rec, "textual distortion record whose text_source is not a rumour source")
-        if im == "Repurposed Image":
-            return "fake_text_real_image", "textual+repurposed"
-        if im == "AI-generated Image":
-            return "fake_text_fake_image", "textual+ai_image"
-        raise _fail(rec, f"textual distortion record with unexpected image_source {im!r}")
-
-    if fc == "mismatch":
-        # Paper 3.1.3: repurposed (NewsCLIPpings) or edited (DGM4 text, COCO-Counterfactuals).
-        if ts == im == "Newsclipings":
-            return "ooc", "mismatch+newsclippings"
-        if ts == im == "DGM4":
-            return "fake_text_real_image", "mismatch+dgm4_text_edit"
-        if ts == im == "COCO-Counterfactuals":
-            if sub == "coco_image_edit":
-                return "real_text_fake_image", "mismatch+coco_image_edit"
-            if sub == "coco_text_edit":
-                return "fake_text_fake_image", "mismatch+coco_text_edit"
-            raise _fail(rec, f"COCO-Counterfactuals record in unexpected folder {sub!r}")
-        raise _fail(rec, f"mismatch record with unexpected sources text={ts!r} image={im!r}")
-
-    raise _fail(rec, f"unknown fake_cls {fc!r}")
+    try:
+        return FOLDER_TO_GROUP[sub], sub
+    except KeyError:
+        raise MappingError(f"folder {sub!r} is not in FOLDER_TO_GROUP; add it after reading the paper\n"
+                           f"  record: {json.dumps(rec, ensure_ascii=False)[:300]}") from None
 
 
 @dataclass
@@ -145,11 +104,7 @@ class LoaderReport:
         lines.append("\nrecords per group:")
         for g in GROUPS:
             lines.append(f"  {self.per_group[g]:6d}  {g}")
-        lines.append("\nrecords per rule:")
-        for r, n in self.per_rule.most_common():
-            lines.append(f"  {n:6d}  {r}")
-        lines.append(f"\nrecords with blank text/image source (accepted by folder): {self.blank_source_records}")
-        lines.append(f"paper totals check (original/textual/visual/mismatch = 3300/3300/1100/3300): {self.totals_check}")
+        lines.append(f"\npaper totals check (original/textual/visual/mismatch = 3300/3300/1100/3300): {self.totals_check}")
         if self.missing_images:
             lines.append("images not found on disk: " + ", ".join(
                 f"{s}={n}" for s, n in sorted(self.missing_images.items())))
@@ -188,13 +143,10 @@ def load_mmfakebench(root: str | Path, splits=("val", "test"),
             raise MappingError(f"{json_path} is not a JSON list")
 
         for idx, rec in enumerate(records):
-            group, rule = classify(rec)
-            sub = subcategory(rec["image_path"])
+            group, sub = classify(rec)
             img, exists = _resolve_image(root, split, rec["image_path"])
             if not exists:
                 rep.missing_images[split] += 1
-            if rec.get("text_source", "") == "" or rec.get("image_source", "") == "":
-                rep.blank_source_records += 1
 
             samples.append(Sample(
                 sample_id=f"mmfb_{split}_{idx}",
@@ -207,22 +159,16 @@ def load_mmfakebench(root: str | Path, splits=("val", "test"),
                 subcategory=sub,
                 text_source=rec.get("text_source", ""),
                 image_source=rec.get("image_source", ""),
-                rule=rule,
+                rule=f"folder:{sub}",
                 extra={"gt_answers": rec.get("gt_answers", "")},
             ))
             rep.records += 1
             rep.per_split[split] += 1
             rep.per_group[group] += 1
-            rep.per_rule[rule] += 1
             rep.per_fake_cls[rec["fake_cls"]] += 1
             rep.folder_to_groups[sub][group] += 1
 
-    # Check 1: fields and folder must agree -> one group per folder.
-    bad = {f: dict(g) for f, g in rep.folder_to_groups.items() if len(g) != 1}
-    if bad:
-        raise MappingError(f"folders mapped to more than one group: {bad}")
-
-    # Check 2: reproduce the paper's four totals when the full benchmark is loaded.
+    # Check: reproduce the paper's four totals when the full benchmark is loaded.
     if set(splits) >= {"val", "test"}:
         got = {k: rep.per_fake_cls[k] for k in PAPER_TOTALS}
         if got != PAPER_TOTALS:
