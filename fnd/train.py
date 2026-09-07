@@ -107,6 +107,14 @@ def run_epoch(model, loader, device, task, optimizer=None, log_every=50) -> dict
         alphas += out["attention"].tolist()
 
     result = {"loss": total_loss / max(n_seen, 1), "seconds": time.time() - t0}
+    if training:   # what the sampler actually drew this epoch (labels are never changed, only frequency)
+        from collections import Counter
+        drawn = Counter(scen)
+        result["drawn_real"] = sum(1 for y in y_bin if y == 0)
+        result["drawn_fake"] = sum(1 for y in y_bin if y == 1)
+        result["drawn_per_scenario"] = {int(k): drawn[k] for k in sorted(drawn)}
+        print(f"    drawn this epoch: real {result['drawn_real']}  fake {result['drawn_fake']}  "
+              f"per scenario {result['drawn_per_scenario']}")
     if task == "binary":
         result.update(binary_metrics(y_bin, probs))
         result["per_scenario"] = per_scenario_accuracy(scen, y_bin, preds)
