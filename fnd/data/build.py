@@ -256,7 +256,7 @@ def assign_splits(selected: list[Sample], fractions: dict[str, float] | None = N
 # ----------------------------------------------------------------------------
 
 CSV_COLUMNS = [
-    "sample_id", "source", "source_split", "group", "label_index", "label_binary",
+    "sample_id", "source", "source_split", "scenario", "group", "label_index", "label_binary",
     "text_fake", "image_fake", "ooc", "text", "image_path", "raw_label", "subcategory",
     "text_source", "image_source", "rule", "text_key", "image_key", "image_sha1",
     "image_dhash", "image_ok", "cluster", "split",

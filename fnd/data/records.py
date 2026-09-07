@@ -48,7 +48,10 @@ GROUP_FLAGS: dict[str, tuple[int, int, int]] = {
 }
 _FLAGS_TO_GROUP = {v: k for k, v in GROUP_FLAGS.items()}
 
-# Integer index used ONLY when a model needs a class id (training time).
+# Scenario number exactly as written in the supervisor's instructions (1..5).
+SCENARIO_NUMBER: dict[str, int] = {g: i + 1 for i, g in enumerate(GROUPS)}
+
+# Same order, 0-based, used ONLY when a model needs a class id (PyTorch starts at 0).
 LABEL_INDEX: dict[str, int] = {g: i for i, g in enumerate(GROUPS)}
 
 
@@ -102,10 +105,15 @@ class Sample:
     def label_binary(self) -> int:
         return binary_label(self.group)
 
+    @property
+    def scenario(self) -> int:
+        return SCENARIO_NUMBER[self.group]
+
     def to_row(self) -> dict:
         d = asdict(self)
         d.pop("extra")
         d.update(
+            scenario=self.scenario,
             text_fake=self.text_fake,
             image_fake=self.image_fake,
             ooc=self.ooc,

@@ -13,9 +13,9 @@ import csv
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from .records import GROUPS
+from .records import GROUPS, SCENARIO_NUMBER
 
-REQUIRED = {"sample_id", "group", "split", "text", "image_path", "text_key", "image_key",
+REQUIRED = {"sample_id", "scenario", "group", "split", "text", "image_path", "text_key", "image_key",
             "image_sha1", "image_dhash", "image_ok", "label_binary"}
 
 
@@ -87,7 +87,13 @@ def verify_rows(rows: list[dict], fractions: dict[str, float] | None = None,
             fails.append(f"{r['sample_id']}: label_binary {r['label_binary']} but group {r['group']}")
             break
 
-    # 8. image content verified (and files present) when asked
+    # 8. scenario number matches the group
+    for r in rows:
+        if r["scenario"] != str(SCENARIO_NUMBER.get(r["group"], -1)):
+            fails.append(f"{r['sample_id']}: scenario {r['scenario']} does not match group {r['group']}")
+            break
+
+    # 9. image content verified (and files present) when asked
     if check_files:
         not_ok = [r["sample_id"] for r in rows if r["image_ok"] != "1"]
         if not_ok:
