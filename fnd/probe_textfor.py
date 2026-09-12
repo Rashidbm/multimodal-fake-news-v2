@@ -103,7 +103,7 @@ def load_aligned(features_path: str | Path, csv_path: str | Path) -> dict:
             f"(first: {missing[:3]}). The features were extracted from a different build."
         )
 
-    keep, y_bin, y_txt, y_idx, scen, splits = [], [], [], [], [], []
+    keep, y_bin, y_txt, y_idx, scen, splits, subcat = [], [], [], [], [], [], []
     for pos, sid in enumerate(ids):
         r = rows[sid]
         keep.append(pos)
@@ -112,6 +112,7 @@ def load_aligned(features_path: str | Path, csv_path: str | Path) -> dict:
         y_idx.append(int(r["label_index"]))
         scen.append(int(r["scenario"]))
         splits.append(r["split"])
+        subcat.append(r.get("subcategory", "") or r.get("source", "?"))
 
     return {
         "ids": [ids[p] for p in keep],
@@ -120,6 +121,7 @@ def load_aligned(features_path: str | Path, csv_path: str | Path) -> dict:
         "y_txt": torch.tensor(y_txt, dtype=torch.float32),
         "y_idx": torch.tensor(y_idx, dtype=torch.long),
         "scenario": scen,
+        "subcategory": subcat,
         "split": splits,
         "meta": payload.get("meta", {}),
     }
@@ -370,6 +372,28 @@ def main(argv=None) -> int:
 
     bin_pred_te = [1 if p >= 0.5 else 0 for p in prob_te]
     results["per_scenario_binary"] = per_scenario_accuracy(scen_te, yb_te, bin_pred_te)
+
+    # text_fake is not one phenomenon. MMFakeBench builds it from AI-generated
+    # text (chatgpt_match, fever_AI, llm_*), human-written rumours
+    # (rumor_match, politicat_match, gossipcop_match) and algorithmic word
+    # edits (DGM4_text_edit_senti, coco_text_edit). Text Fluoroscopy detects
+    # machine generation, so it should separate the first group and struggle
+    # on the second - a human rumour carries no generation fingerprint.
+    # Breaking the score down by sub-category is what turns "the stream scores
+    # X" into a statement about what it actually detects.
+    sub_te = [c for c, k in zip(data["subcategory"], te.tolist()) if k]
+    by_sub: dict[str, list[int]] = {}
+    for c, t, p in zip(sub_te, ytxt_te, txt_pred_te):
+        by_sub.setdefault(c, []).append(int(t == p))
+    per_sub = {c: {"n": len(v), "accuracy": sum(v) / len(v)} for c, v in by_sub.items()}
+    results["per_subcategory_text_fake"] = per_sub
+
+    if len(per_sub) > 1:
+        log()
+        log("  text_fake accuracy by source sub-category (what it really detects):")
+        for c, d in sorted(per_sub.items(), key=lambda kv: -kv[1]["accuracy"]):
+            note = "   (few samples - do not read much into this)" if d["n"] < 20 else ""
+            log(f"    {c:<28} n={d['n']:<6} acc {d['accuracy']:.4f}{note}")
 
     # ---- write -------------------------------------------------------------
     (out_dir / "metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")

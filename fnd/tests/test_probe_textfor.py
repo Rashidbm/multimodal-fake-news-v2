@@ -31,6 +31,7 @@ def _make_dataset(tmp_path, n_per_class=60, dim=32, separable=True, shuffle_feat
             text_fake, image_fake, ooc = GROUP_FLAGS[group]
             rows.append({
                 "sample_id": sid,
+                "subcategory": f"src_{gi}_{'a' if k % 2 else 'b'}",
                 "scenario": gi + 1,
                 "label_index": gi,
                 "label_binary": 0 if group == "genuine" else 1,
@@ -178,3 +179,19 @@ def test_weighted_and_unweighted_both_run(tmp_path):
         assert probe_main(["--features", str(fpath), "--csv", str(csv_path),
                            "--out", str(out), "--epochs", "15", "--device", "cpu"] + flag) == 0
         assert json.loads((out / "metrics.json").read_text())["text_fake"]["accuracy"] > 0.9
+
+
+def test_per_subcategory_breakdown(tmp_path):
+    """text_fake mixes AI-generated text, human rumours and word edits, and
+    the method only detects the first. The breakdown by source sub-category
+    is what separates 'the stream scores X' from 'the stream detects Y'."""
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=40, dim=16, separable=True)
+    out = tmp_path / "probe_sub"
+    assert probe_main(["--features", str(fpath), "--csv", str(csv_path), "--out", str(out),
+                       "--epochs", "15", "--device", "cpu"]) == 0
+
+    r = json.loads((out / "metrics.json").read_text())
+    per_sub = r["per_subcategory_text_fake"]
+    assert len(per_sub) > 1
+    assert sum(d["n"] for d in per_sub.values()) == r["text_fake"]["n"]
+    assert all(0.0 <= d["accuracy"] <= 1.0 for d in per_sub.values())

@@ -229,6 +229,34 @@ number that says whether this stream works.
 honest statement of what one stream can and cannot contribute, and it is the
 argument for why fusion is needed at all.
 
+### What `text_fake` actually contains
+
+`text_fake=1` is not one phenomenon. Reading `FOLDER_TO_GROUP` in
+`fnd/data/mmfakebench.py`, MMFakeBench builds it from three different things:
+
+| Source folders | The text is |
+|---|---|
+| `chatgpt_match`, `fever_AI`, `llm_rewrite`, `llm_*_generation` | AI-generated |
+| `rumor_match`, `politicat_match`, `gossipcop_match` | human-written rumours |
+| `DGM4_text_edit_senti`, `coco_text_edit` | algorithmically edited (word swaps) |
+
+Text Fluoroscopy detects **machine generation**. A human-written rumour from
+PolitiFact carries no generation fingerprint, so this stream should separate
+the first group well and struggle on the second — however well it is
+implemented. The guidelines name this class "AI-Text", but the data under it
+is broader than that.
+
+The probe therefore reports `text_fake` accuracy broken down by source
+sub-category. That is what turns "the stream scores X" into a statement about
+what it actually detects, and it is the most defensible finding this stream
+can contribute: *this method generalises to machine-generated captions and
+not to human rumours* is a real result, not a disappointing number.
+
+`ooc` is not affected by any of this. All three of its sources are
+NewsCLIPpings, which builds mismatched pairs from a genuine human-written
+caption and another article's image — nothing is written or edited, only the
+pairing is wrong, so `text_fake=0` is correct for it.
+
 ### Class balance
 
 The five scenario groups are equal in size, but they do not divide evenly by
