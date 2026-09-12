@@ -229,6 +229,27 @@ number that says whether this stream works.
 honest statement of what one stream can and cannot contribute, and it is the
 argument for why fusion is needed at all.
 
+### Class balance
+
+The five scenario groups are equal in size, but they do not divide evenly by
+any binary question:
+
+| Target | Positive : negative | Why |
+|---|---|---|
+| `text_fake` | 40 / 60 | 2 groups have machine captions, 3 have human ones |
+| `label_binary` | 20 / 80 | only `genuine` is real |
+| 5-class | 20 each | equal by construction |
+
+The loss is re-weighted by inverse class frequency (`pos_weight` for the
+binary heads, per-class weights for the 5-class head); `--no-class-weight`
+turns it off. Deleting rows to force a 50/50 split would be the wrong fix
+twice over: it throws away real examples, and because the same CSV feeds all
+three streams, a subset here tears the row set away from `v_semantic` and
+`v_imgfor` at fusion time.
+
+AUC is the figure to quote when the prior is in question — it is computed
+from the ranking and does not move with class proportions at all.
+
 Reported for each: accuracy / precision / recall / F1 / AUC (binary),
 accuracy and macro-F1 and F1 per class (5-class), a confusion matrix, and
 `text_fake` accuracy inside each scenario. Every score sits beside a

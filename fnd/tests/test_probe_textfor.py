@@ -151,3 +151,30 @@ def test_probe_reports_chance_on_noise(tmp_path):
                        "--epochs", "20", "--device", "cpu"]) == 0
     r = json.loads((out / "metrics.json").read_text())
     assert r["multiclass"]["accuracy"] < 0.5          # chance is 0.2
+
+
+def test_class_weights_match_inverse_frequency():
+    """text_fake is 2 groups against 3 (40/60) and label_binary 1 against 4
+    (20/80). Weighting the loss is how that is handled - not by deleting
+    rows, which would break the row set the other two streams join against."""
+    from fnd.probe_textfor import class_weights
+
+    y_txt = torch.tensor([1.0] * 40 + [0.0] * 60)      # text_fake proportions
+    assert class_weights(y_txt, 1).item() == pytest.approx(1.5)
+
+    y_bin = torch.tensor([1.0] * 80 + [0.0] * 20)      # label_binary proportions
+    assert class_weights(y_bin, 1).item() == pytest.approx(0.25)
+
+    w = class_weights(torch.tensor([0, 0, 1, 2, 2, 2]), 3)
+    assert w.shape == (3,) and w[1] > w[2]             # rarer class weighs more
+
+    assert class_weights(torch.tensor([1.0, 1.0]), 1) is None   # one class only
+
+
+def test_weighted_and_unweighted_both_run(tmp_path):
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=30, dim=16, separable=True)
+    for flag in ([], ["--no-class-weight"]):
+        out = tmp_path / f"probe{len(flag)}"
+        assert probe_main(["--features", str(fpath), "--csv", str(csv_path),
+                           "--out", str(out), "--epochs", "15", "--device", "cpu"] + flag) == 0
+        assert json.loads((out / "metrics.json").read_text())["text_fake"]["accuracy"] > 0.9

@@ -136,13 +136,42 @@ def split_mask(data: dict, name: str) -> torch.Tensor:
 # training
 # ---------------------------------------------------------------------------
 
+def class_weights(y: torch.Tensor, out_dim: int) -> torch.Tensor | None:
+    """Re-weight the loss by inverse class frequency.
+
+    The five scenario groups are equal in size, but they do not divide
+    evenly by any binary question: text_fake is 2 groups against 3 (40/60),
+    label_binary is 1 against 4 (20/80).  Weighting the loss is the right
+    lever here - dropping rows to force a 50/50 split would throw away real
+    examples and, because the same CSV feeds all three streams, would tear
+    the row set away from v_semantic and v_imgfor.
+    """
+    if out_dim == 1:
+        pos = float((y == 1).sum())
+        neg = float((y == 0).sum())
+        if pos == 0 or neg == 0:
+            return None
+        return torch.tensor([neg / pos], device=y.device)
+    counts = torch.bincount(y, minlength=out_dim).float()
+    counts = counts.clamp(min=1.0)
+    return (counts.sum() / (out_dim * counts)).to(y.device)
+
+
 def train_head(xtr, ytr, xva, yva, out_dim, epochs, lr, patience, batch_size,
-               device, seed, log) -> ProbeHead:
+               device, seed, log, weighted: bool = True) -> ProbeHead:
     """Train one head, keeping the weights from the best validation epoch."""
     torch.manual_seed(seed)
     head = ProbeHead(xtr.shape[1], out_dim).to(device)
     opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=1e-4)
-    loss_fn = nn.BCEWithLogitsLoss() if out_dim == 1 else nn.CrossEntropyLoss()
+
+    w = class_weights(ytr, out_dim) if weighted else None
+    if out_dim == 1:
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=w)
+        if w is not None:
+            log(f"    class balance: {int((ytr == 1).sum())} positive / "
+                f"{int((ytr == 0).sum())} negative, pos_weight {w.item():.3f}")
+    else:
+        loss_fn = nn.CrossEntropyLoss(weight=w)
 
     best_score, best_state, bad = -1.0, None, 0
     n = xtr.shape[0]
@@ -221,6 +250,8 @@ def main(argv=None) -> int:
     ap.add_argument("--patience", type=int, default=10)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-class-weight", action="store_true",
+                    help="do not re-weight the loss by inverse class frequency")
     args = ap.parse_args(argv)
 
     device = torch.device(args.device) if args.device != "auto" else torch.device(
@@ -270,7 +301,8 @@ def main(argv=None) -> int:
         log(title)
         log("-" * 66)
         head = train_head(x[tr], y[tr], x[va], y[va], 1, args.epochs, args.lr,
-                          args.patience, args.batch_size, device, args.seed, log)
+                          args.patience, args.batch_size, device, args.seed, log,
+                          weighted=not args.no_class_weight)
         with torch.no_grad():
             prob = torch.sigmoid(head(x[te])).squeeze(1).cpu().tolist()
         y_te = y[te].cpu().int().tolist()
@@ -301,7 +333,8 @@ def main(argv=None) -> int:
     log("5-CLASS  (the five scenarios)")
     log("-" * 66)
     head_m = train_head(x[tr], y_idx[tr], x[va], y_idx[va], len(GROUPS), args.epochs, args.lr,
-                        args.patience, args.batch_size, device, args.seed, log)
+                        args.patience, args.batch_size, device, args.seed, log,
+                        weighted=not args.no_class_weight)
     with torch.no_grad():
         logits_te = head_m(x[te])
         pred_te = logits_te.argmax(1).cpu().tolist()
