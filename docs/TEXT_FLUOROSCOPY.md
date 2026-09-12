@@ -10,7 +10,7 @@ Files: `fnd/models/text_fluoroscopy.py` (the module), `fnd/extract_textfor.py`
 
 Most AI-text detectors work from the outside: measure how surprised a model is
 by the words, and turn that into a score. This one works from the inside. A
-frozen Qwen2 reads the caption, and instead of asking it for a verdict we read
+frozen LLM reads the caption, and instead of asking it for a verdict we read
 its internal activations while it processes the text. Machine-written prose
 leaves a recognisable trace in those activations that is not obvious in the
 words themselves.
@@ -45,96 +45,111 @@ different lengths and asserts one identical vector.
 
 **Why the projection in 4.5 exists.** Stage 4 runs multi-head cross-attention
 between the three vectors, and attention needs `Q`, `K`, `V` to share one
-embedding size. CLIP and UnivFD both emit 768; Qwen2-7B emits 3584. The
+embedding size. CLIP and UnivFD both emit 768; Qwen3.5-9B emits 4096. The
 projection is what makes the three comparable.
 
-## Two deliberate departures from the guidelines
+## The model: Qwen3.5-9B
 
-**1. "Layer 30" does not exist on Qwen2-7B.** `output_hidden_states=True`
-returns `num_layers + 1` tensors, because index 0 is the embedding output and
-`1..num_layers` are the transformer blocks. Qwen2-7B has 28 layers, so the valid
-range is 0..28 and index 30 raises `IndexError`. `resolve_layer` validates the
-index at construction and reports the real range, so an invalid layer fails in
-the first second rather than forty minutes into a run.
+| | Qwen3.5-9B | Qwen2-7B | paper's gte-Qwen1.5-7B |
+|---|---|---|---|
+| layers | **32** | 28 | 32 |
+| hidden size | **4096** | 3584 | 4096 |
+| layer 30 valid? | **yes** | no | yes |
 
-See "which layer" below for where 30 came from and what we use instead.
+Switching to Qwen3.5-9B resolves both numbers the guidelines got from the
+paper. Layer 30 exists, hidden size really is 4096, and the geometry matches
+the paper's encoder exactly — so the paper's layer choice transfers literally
+instead of having to be rescaled. `resolve_layer` still validates the index
+against whatever model is loaded, so pointing this at a 28-layer model fails
+in the first second rather than an hour into a run.
 
-**2. Features are cached unprojected.**
+**What the switch costs.** Qwen3.5 is not a plain decoder stack. Its layout is
+`8 x (3 x (Gated DeltaNet -> FFN) -> 1 x (Gated Attention -> FFN))` with
+sparse Mixture-of-Experts, so three quarters of its blocks are linear-attention
+rather than standard attention. Two consequences:
 
-The guidelines describe shipping
-`v_textfor [768]`. An untrained `Linear(3584, 768)` is a *random* projection: it
-discards signal arbitrarily and nothing downstream can recover it, because the
-weights are frozen inside the cache file. So `extract_textfor.py` caches the
-`(N, H)` pooled vectors, and `TextForensicProjection` is exported for the fusion
-module to own, so it trains during stage 2. Cost: a larger cache file
-(~800 MB vs ~150 MB for 50k rows). Set this back only with a reason.
+- **Layer 30 is a Gated DeltaNet block**, not an attention block (every 4th
+  layer — 4, 8, ... 32 — is Gated Attention). Whether the forensic signal
+  sits in the same place in a hybrid stack as in a pure attention stack is
+  not something the paper or anyone else has studied. Layers 28 and 32 are
+  attention blocks, so comparing 28 / 30 / 32 is a cheap and genuinely
+  novel ablation if time allows.
+- **Layer truncation is now off by default.** At layer 30 of 32 it saved
+  about 6%, and `test_layer_truncation_keeps_the_same_vector` only proves
+  the two paths agree for a standard decoder stack. Enable `--truncate-layers`
+  only after checking a truncated run reproduces an untruncated one on this
+  model.
+
+**Practical notes for the 4090.** 9B parameters in bf16 is roughly 18 GB of
+24 GB, so the default batch size is 4; drop to 2 if it OOMs, raise it if
+`nvidia-smi` shows room. Qwen3.5 also needs a recent `transformers` — an
+older pin fails with an unknown-model-type error on load, which is the first
+thing to check if the smoke test dies immediately.
+
+## One deliberate departure from the guidelines
+
+**Features are cached unprojected.** The guidelines describe shipping
+`v_textfor [768]`. An untrained `Linear(4096, 768)` is a *random* projection:
+it discards signal arbitrarily and nothing downstream can recover it, because
+the weights are frozen inside the cache file. So `extract_textfor.py` caches
+the `(N, H)` pooled vectors, and `TextForensicProjection` is exported for the
+fusion module to own, so it trains during stage 2. Cost: a larger cache file.
+Set this back only with a reason.
 
 ## Which layer, and where "30" came from
 
 The method is Yang et al., *Text Fluoroscopy: Detecting LLM-Generated Text
 through Intrinsic Features*, EMNLP 2024
-([ACL Anthology](https://aclanthology.org/2024.emnlp-main.885/)). Two facts from
-that paper settle the question:
+([ACL Anthology](https://aclanthology.org/2024.emnlp-main.885/)). Its encoder
+is gte-Qwen1.5-7B-instruct, 32 layers, hidden 4096.
 
-- Its encoder is **gte-Qwen1.5-7B-instruct**, which has **32 layers**. Layer 30
-  exists there. The guidelines kept the number but swapped the model to
-  Qwen2-7B-Instruct, which has 28 — hence the impossible index.
-- The paper does not fix a layer at all. It **selects one per input** as the
-  layer whose vocabulary-space distribution diverges most from both the first
-  and last layers:
+The paper does not fix a layer at all. It **selects one per input** as the
+layer whose vocabulary-space distribution diverges most from both the first
+and last layers:
 
-  `M = arg max_j { KL[q_N || q_j] + KL[q_0 || q_j] }`
+`M = arg max_j { KL[q_N || q_j] + KL[q_0 || q_j] }`
 
-  Their ablation reports that this typically lands on layer 30, and that fixing
-  it there gives nearly equivalent accuracy at a large speed saving. So "layer
-  30" is the *empirical result* of the criterion on a 32-layer model, not a
-  principled constant.
+Its ablation reports that this typically lands on layer 30, and that fixing
+it there gives nearly equivalent accuracy at a large speed saving. So "layer
+30" is the *empirical result* of that criterion on a 32-layer model — which
+is what we now have.
 
-**What we use: layer 26 of 28.** That is the paper's 30/32 relative depth
-(0.94) carried across to Qwen2-7B: `0.94 x 28 ≈ 26`. It keeps the paper's
-finding — near the end, but before the final blocks specialise toward
-next-token prediction and discard the general stylistic information the
-forensic signal lives in — without pretending an index from a different
-architecture transfers literally.
+**We use layer 30.** With Qwen3.5-9B matching the paper's depth and width,
+this is the paper's own setting rather than a number carried across
+architectures. Implementing the KL criterion itself remains the more faithful
+option if there is time: it needs the LM head and a vocabulary projection per
+candidate layer, and costs speed.
 
-Three options were on the table, recorded here so the decision is auditable:
-
-| Option | Layer | Trade-off |
-|---|---|---|
-| Switch to gte-Qwen1.5-7B-instruct | 30 of 32 | Reproduces the paper exactly; different model than the guidelines specify |
-| **Keep Qwen2-7B, scale the depth** | **26 of 28** | **Same relative position, same model as the guidelines** |
-| Implement the KL criterion | per input | Faithful to the method; needs the LM head and a vocab projection per layer, and costs speed |
-
-**This needs the supervisor's sign-off before the full extraction**, and the
-chosen layer belongs in the report. Changing it later means re-running
-everything, so decide first, run once.
+**This still needs the supervisor's sign-off before the full extraction**, and
+the chosen layer belongs in the report — not least because layer 30 lands on a
+DeltaNet block here.
 
 One further difference from the paper, noted for honesty: it reads the **last
 token's** hidden state (gte-Qwen models are trained for last-token pooling),
 while the guidelines specify masked mean pooling over the sequence. We follow
-the guidelines. Mean pooling is the more robust default for a model that was not
+the guidelines. Mean pooling is the more robust default for a model not
 trained with a dedicated pooling token, but it is a departure and the report
 should say so.
 
 ## Why the features are cached at all
 
-Qwen2 is frozen, so a caption's pooled vector is identical in epoch 1 and epoch
+The model is frozen, so a caption's pooled vector is identical in epoch 1 and epoch
 50 — same input, same weights, same output. Recomputing it every epoch would
 spend hours re-deriving numbers that cannot change.
 
 | | recompute every epoch | cached |
 |---|---|---|
-| per epoch (50k rows) | ~1.5 h | ~2 s (load a tensor) |
-| 50 epochs | ~75 h | ~5 min |
+| per epoch (8,250 rows) | ~25 min | ~1 s (load a tensor) |
+| 50 epochs | ~20 h | ~2 min |
 
 Identical model, identical accuracy. Caching is only valid *because* the
-backbone is frozen; if Qwen2 were being fine-tuned the vectors would change
+backbone is frozen; if the model were being fine-tuned the vectors would change
 every step and this would be plainly wrong.
 
 ## Layer truncation
 
-`truncate_layers` (default on) drops the blocks above the one being read, saving
-compute and VRAM proportionally. There is a trap in it worth recording:
+`truncate_layers` (default **off**, see "The model" above) drops the blocks above
+the one being read, saving compute and VRAM proportionally. There is a trap in it worth recording:
 transformers builds `hidden_states` as
 `[embeddings, out_1, ..., out_{N-1}, norm(out_N)]` — every entry is the raw
 block output *except the last*, which has the model's final RMSNorm applied.
@@ -178,10 +193,10 @@ python -m fnd.extract_textfor --csv data/processed/balanced_5group.csv \
 Or `bash scripts/run_textfor.sh`, which installs, runs the tests, does the
 200-row subset and then the full extraction.
 
-Qwen2-7B is ~15 GB and downloads on first use into `~/.cache/huggingface`; the
+Qwen3.5-9B is ~18 GB and downloads on first use into `~/.cache/huggingface`; the
 repo may be gated, in which case `huggingface-cli login` is needed once on that
-machine. Expect roughly 5-10 samples/s in bf16 at batch 8 on a 4090, so about
-1.5-2 h for 50k rows. Drop `--batch-size` to 4 if VRAM runs out. Use `nohup` or
+machine. Expect roughly 4-8 samples/s in bf16 at batch 4 on a 4090, so about
+20-35 min for the 8,250-row build. Drop `--batch-size` to 2 if VRAM runs out. Use `nohup` or
 `screen` for the full run so a dropped connection does not kill it.
 
 `features/` and `*.pt` are gitignored: the script travels through git, the
@@ -217,7 +232,7 @@ Three heads train in one run, on the same features and splits:
 The distinction is easy to miss and changes the conclusion. `label_binary`
 means "genuine vs everything else", so it is 1 for an out-of-context pair and
 for a real caption with a tampered image — both of which have **genuine
-human-written text**. Qwen cannot see an image or a mismatched pairing, so
+human-written text**. the model cannot see an image or a mismatched pairing, so
 scoring this stream against `label_binary` asks it to call real human writing
 "fake" in two of the five scenarios. Working features would look broken.
 

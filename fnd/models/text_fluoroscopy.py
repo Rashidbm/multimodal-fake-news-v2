@@ -26,11 +26,11 @@ import torch.nn as nn
 
 @dataclass
 class TextFluoroscopyConfig:
-    model_name: str = "Qwen/Qwen2-7B-Instruct"
-    layer: int = 26               # see "which layer" in docs/TEXT_FLUOROSCOPY.md
+    model_name: str = "Qwen/Qwen3.5-9B"
+    layer: int = 30               # see "which layer" in docs/TEXT_FLUOROSCOPY.md
     max_len: int = 512            # tokens per caption
     proj_dim: int = 768           # must match v_semantic / v_imgfor
-    truncate_layers: bool = True  # drop layers above `layer` to save time/VRAM
+    truncate_layers: bool = False  # off by default; see the note in __init__
     dtype: str = "auto"           # auto | bfloat16 | float16 | float32
     pretrained: bool = True       # False = tiny random Qwen2, used by the unit tests
 
@@ -86,12 +86,12 @@ class TextForensicProjection(nn.Module):
     """Linear(in_dim -> out_dim) + GELU.
 
     Stage 4's cross-attention needs v_semantic, v_imgfor and v_textfor to
-    share one embedding size; CLIP and UnivFD emit 768, Qwen2-7B emits 3584.
+    share one embedding size; CLIP and UnivFD emit 768, Qwen3.5-9B emits 4096.
     No transformers import here, so the fusion module can depend on it
     without pulling in an LLM.
     """
 
-    def __init__(self, in_dim: int = 3584, out_dim: int = 768):
+    def __init__(self, in_dim: int = 4096, out_dim: int = 768):
         super().__init__()
         if in_dim <= 0 or out_dim <= 0:
             raise ValueError(f"dims must be positive, got {in_dim} -> {out_dim}")
@@ -136,7 +136,7 @@ def resolve_dtype(name: str, device: torch.device) -> torch.dtype:
 
 
 class TextFluoroscopy(nn.Module):
-    """Frozen Qwen2 + masked mean pooling -> (B, hidden_size).
+    """Frozen LLM + masked mean pooling -> (B, hidden_size).
 
     The projection is not applied here; ``projection()`` returns a correctly
     sized TextForensicProjection for the fusion stage to train.
@@ -188,8 +188,20 @@ class TextFluoroscopy(nn.Module):
         # Cutting the stack would make the layer we read the new last one and
         # silently norm it.  Identity keeps both paths equal; see
         # test_layer_truncation_keeps_the_same_vector.
+        # Off by default. At layer 30 of 32 it saves about 6% of the forward
+        # pass, which does not buy much against the risk: the equality of the
+        # two paths is verified (test_layer_truncation_keeps_the_same_vector)
+        # only for a standard decoder stack, and Qwen3.5 is a hybrid of Gated
+        # DeltaNet and Gated Attention blocks with sparse MoE. Enable it only
+        # after checking that a truncated run reproduces an untruncated one on
+        # the model actually in use.
         self._truncated = False
         if cfg.truncate_layers and 0 < self.layer < self.num_layers:
+            if not (hasattr(self.model, "layers") and hasattr(self.model, "norm")):
+                raise RuntimeError(
+                    f"truncate_layers=True but {cfg.model_name} does not expose "
+                    "model.layers / model.norm; run with truncation off"
+                )
             self.model.layers = self.model.layers[: self.layer]
             self.model.norm = nn.Identity()
             self._truncated = True

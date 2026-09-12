@@ -3,7 +3,7 @@
     python -m fnd.extract_textfor --csv data/processed/balanced_5group.csv \
                                   --out features/v_textfor.pt
 
-Qwen2 is frozen, so a caption's pooled vector is identical in every epoch;
+The model is frozen, so a caption's pooled vector is identical in every epoch;
 extracting once and caching is what keeps stage 2 minutes rather than days.
 
 Output (torch.save):
@@ -18,7 +18,7 @@ Output (torch.save):
 sample_ids ship with the tensor so stage 2 can join to v_semantic and
 v_imgfor by id rather than by assumed row order.
 
-Roughly 5-10 samples/s on one RTX 4090 (Qwen2-7B, bf16, batch 8,
+Roughly 4-8 samples/s on one RTX 4090 (Qwen3.5-9B, bf16, batch 4,
 max_len 512).  See docs/TEXT_FLUOROSCOPY.md.
 """
 from __future__ import annotations
@@ -54,21 +54,23 @@ def read_rows(csv_path: str | Path, split: str | None = None) -> list[dict]:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Extract v_textfor with a frozen Qwen2 (Text Fluoroscopy).")
+    ap = argparse.ArgumentParser(description="Extract v_textfor with a frozen Qwen (Text Fluoroscopy).")
     ap.add_argument("--csv", required=True, help="built CSV, e.g. data/processed/balanced_5group.csv")
     ap.add_argument("--out", default="features/v_textfor.pt")
-    ap.add_argument("--model", default="Qwen/Qwen2-7B-Instruct",
-                    help="use Qwen/Qwen2-0.5B-Instruct to smoke-test the pipeline on CPU")
-    ap.add_argument("--layer", type=int, default=26,
+    ap.add_argument("--model", default="Qwen/Qwen3.5-9B",
+                    help="use Qwen/Qwen2-0.5B-Instruct to smoke-test the plumbing on CPU")
+    ap.add_argument("--layer", type=int, default=30,
                     help="index into hidden_states; 0 = embeddings, 1..num_layers = blocks")
     ap.add_argument("--max-len", type=int, default=512)
-    ap.add_argument("--batch-size", type=int, default=8, help="8 fits Qwen2-7B bf16 on 24 GB; lower it if OOM")
+    ap.add_argument("--batch-size", type=int, default=4,
+                    help="Qwen3.5-9B in bf16 is ~18 GB of the 4090's 24 GB; raise it if VRAM allows")
     ap.add_argument("--dtype", default="auto", choices=["auto", "bfloat16", "float16", "float32"])
     ap.add_argument("--device", default="auto")
     ap.add_argument("--split", default=None, help="only this split; default = all rows")
     ap.add_argument("--limit", type=int, default=None, help="debug: only the first N rows")
-    ap.add_argument("--no-truncate-layers", action="store_true",
-                    help="keep the layers above --layer (slower, same output)")
+    ap.add_argument("--truncate-layers", action="store_true",
+                    help="drop the layers above --layer (~6%% faster; verify it reproduces "
+                         "an untruncated run on this model first)")
     args = ap.parse_args(argv)
 
     device = torch.device(args.device) if args.device != "auto" else torch.device(
@@ -80,7 +82,7 @@ def main(argv=None) -> int:
 
     cfg = TextFluoroscopyConfig(
         model_name=args.model, layer=args.layer, max_len=args.max_len,
-        dtype=args.dtype, truncate_layers=not args.no_truncate_layers,
+        dtype=args.dtype, truncate_layers=args.truncate_layers,
     )
 
     print("===== Text Fluoroscopy =====")

@@ -25,18 +25,20 @@ from fnd.models.text_fluoroscopy import (
 # --- 4.3 layer selection ---------------------------------------------------
 
 def test_resolve_layer_accepts_valid_indices():
-    n = 29                                  # Qwen2-7B: 28 layers + embeddings
-    assert resolve_layer(n, -1) == 28
-    assert resolve_layer(n, -2) == 27
-    assert resolve_layer(n, 20) == 20
+    n = 33                                  # Qwen3.5-9B: 32 layers + embeddings
+    assert resolve_layer(n, -1) == 32
+    assert resolve_layer(n, -2) == 31
+    assert resolve_layer(n, 30) == 30
     assert resolve_layer(n, 0) == 0
 
 
-def test_resolve_layer_rejects_layer_30():
-    """Qwen2-7B has 28 layers, so index 30 cannot exist; fail immediately
-    with the real range rather than an hour into a run."""
+def test_layer_30_depends_on_the_model():
+    """The guidelines' layer 30 is valid on a 32-layer model (Qwen3.5-9B)
+    and impossible on a 28-layer one (Qwen2-7B). The index is validated
+    against whatever model is loaded, not assumed."""
+    assert resolve_layer(33, 30) == 30                      # Qwen3.5-9B: fine
     with pytest.raises(IndexError) as e:
-        resolve_layer(29, 30)
+        resolve_layer(29, 30)                               # Qwen2-7B: not fine
     assert "28 transformer layers" in str(e.value)
 
 
@@ -70,16 +72,16 @@ def test_pooling_rejects_mismatched_mask():
 # --- 4.5 projection --------------------------------------------------------
 
 def test_projection_shape_and_dims():
-    proj = TextForensicProjection(3584, 768)          # Qwen2-7B -> fusion space
-    out = proj(torch.randn(6, 3584))
+    proj = TextForensicProjection(4096, 768)          # Qwen3.5-9B -> fusion space
+    out = proj(torch.randn(6, 4096))
     assert out.shape == (6, 768) and torch.isfinite(out).all()
     assert TextForensicProjection(896, 768)(torch.randn(2, 896)).shape == (2, 768)
 
 
 def test_projection_rejects_unpooled_input():
-    proj = TextForensicProjection(3584, 768)
+    proj = TextForensicProjection(4096, 768)
     with pytest.raises(ValueError):
-        proj(torch.randn(2, 10, 3584))                # forgot to pool
+        proj(torch.randn(2, 10, 4096))                # forgot to pool
     with pytest.raises(ValueError):
         proj(torch.randn(2, 512))                     # wrong hidden size
 

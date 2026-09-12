@@ -61,8 +61,8 @@ def _make_dataset(tmp_path, n_per_class=60, dim=32, separable=True, shuffle_feat
 
 
 def test_head_shapes():
-    assert ProbeHead(3584, 1)(torch.randn(4, 3584)).shape == (4, 1)
-    assert ProbeHead(3584, 5)(torch.randn(4, 3584)).shape == (4, 5)
+    assert ProbeHead(4096, 1)(torch.randn(4, 4096)).shape == (4, 1)
+    assert ProbeHead(4096, 5)(torch.randn(4, 4096)).shape == (4, 5)
 
 
 def test_load_aligned_matches_labels_by_id(tmp_path):

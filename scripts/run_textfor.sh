@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # One-shot Text Fluoroscopy feature extraction for macOS / Linux.
 #
-#   bash scripts/run_textfor.sh                      # Qwen2-7B on the GPU box
-#   bash scripts/run_textfor.sh --batch-size 4       # any fnd.extract_textfor flag
+#   bash scripts/run_textfor.sh                      # Qwen3.5-9B on the GPU box
+#   bash scripts/run_textfor.sh --batch-size 2       # any fnd.extract_textfor flag
 #   SMOKE=1 bash scripts/run_textfor.sh              # Qwen2-0.5B on CPU, 8 rows
 #
 # Needs data/processed/balanced_5group.csv from scripts/run_dataset.sh.
-# Downloads Qwen2-7B-Instruct (~15 GB) into ~/.cache/huggingface on first run;
-# if the repo is gated, run `huggingface-cli login` once on this machine.
+# Downloads Qwen3.5-9B (~18 GB) into ~/.cache/huggingface on first run; needs a
+# recent transformers. If the repo is gated, run `huggingface-cli login` once.
 # Output in features/v_textfor.pt (gitignored) and outputs/textfor_probe/.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +28,7 @@ $PY -m pytest fnd/tests/test_text_fluoroscopy.py -q
 test -f "$CSV" || { echo "run scripts/run_dataset.sh first"; exit 1; }
 
 if [ "${SMOKE:-0}" = "1" ]; then
-  echo "===== smoke test (Qwen2-0.5B, CPU, 8 rows) ====="
+  echo "===== smoke test: plumbing only, small model on CPU ====="
   $PY -m fnd.extract_textfor --csv "$CSV" --out features/v_textfor_smoke.pt \
       --model Qwen/Qwen2-0.5B-Instruct --device cpu --limit 8 --batch-size 2 "$@"
   exit 0
