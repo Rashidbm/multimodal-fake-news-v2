@@ -86,12 +86,12 @@ class TextForensicProjection(nn.Module):
     """Linear(in_dim -> out_dim) + GELU.
 
     Stage 4's cross-attention needs v_semantic, v_imgfor and v_textfor to
-    share one embedding size; CLIP and UnivFD emit 768, Qwen2-7B emits 4096.
+    share one embedding size; CLIP and UnivFD emit 768, Qwen2-7B emits 3584.
     No transformers import here, so the fusion module can depend on it
     without pulling in an LLM.
     """
 
-    def __init__(self, in_dim: int = 4096, out_dim: int = 768):
+    def __init__(self, in_dim: int = 3584, out_dim: int = 768):
         super().__init__()
         if in_dim <= 0 or out_dim <= 0:
             raise ValueError(f"dims must be positive, got {in_dim} -> {out_dim}")

@@ -2,7 +2,9 @@
 
 Produces `v_textfor`, one of the three vectors the fusion stage reasons over.
 Files: `fnd/models/text_fluoroscopy.py` (the module), `fnd/extract_textfor.py`
-(the CLI), `fnd/tests/test_text_fluoroscopy.py`, `scripts/run_textfor.sh`.
+(the CLI), `fnd/probe_textfor.py` (scores this stream alone),
+`fnd/tests/test_text_fluoroscopy.py`, `fnd/tests/test_probe_textfor.py`,
+`scripts/run_textfor.sh`.
 
 ## What it does, in plain language
 
@@ -43,7 +45,7 @@ different lengths and asserts one identical vector.
 
 **Why the projection in 4.5 exists.** Stage 4 runs multi-head cross-attention
 between the three vectors, and attention needs `Q`, `K`, `V` to share one
-embedding size. CLIP and UnivFD both emit 768; Qwen2-7B emits 4096. The
+embedding size. CLIP and UnivFD both emit 768; Qwen2-7B emits 3584. The
 projection is what makes the three comparable.
 
 ## Two deliberate departures from the guidelines
@@ -60,7 +62,7 @@ See "which layer" below for where 30 came from and what we use instead.
 **2. Features are cached unprojected.**
 
 The guidelines describe shipping
-`v_textfor [768]`. An untrained `Linear(4096, 768)` is a *random* projection: it
+`v_textfor [768]`. An untrained `Linear(3584, 768)` is a *random* projection: it
 discards signal arbitrarily and nothing downstream can recover it, because the
 weights are frozen inside the cache file. So `extract_textfor.py` caches the
 `(N, H)` pooled vectors, and `TextForensicProjection` is exported for the fusion
@@ -184,3 +186,37 @@ machine. Expect roughly 5-10 samples/s in bf16 at batch 8 on a 4090, so about
 
 `features/` and `*.pt` are gitignored: the script travels through git, the
 tensors are regenerated on whichever machine has the GPU.
+
+## Scoring this stream on its own
+
+The extractor produces vectors, not predictions, so this stream has no
+accuracy until something classifies those vectors. `fnd/probe_textfor.py`
+trains a small head on the cached features and reports what Qwen2 alone can
+do, before any fusion:
+
+```bash
+python -m fnd.probe_textfor --features features/v_textfor.pt \
+    --csv data/processed/balanced_5group.csv --out outputs/textfor_probe
+```
+
+The head is the paper's: three fully connected layers with Tanh
+(H → 1024 → 512 → out). A binary real/fake head and a 5-class scenario head
+are trained in the same run, so both numbers come from the same features and
+the same splits. Features are standardised with **train** statistics only —
+computing mean and variance over the whole set would leak test information.
+
+Reported: binary accuracy / precision / recall / F1 / AUC, 5-class accuracy
+and macro-F1, F1 per class, a confusion matrix, and binary accuracy inside
+each scenario. Every score sits beside a majority-class and a random baseline
+on the same test split, because an accuracy figure cannot be judged without
+knowing what guessing would score. Written to `metrics.json`,
+`predictions.csv` and `report.txt`.
+
+Two things this is for. It answers "does this stream carry signal at all?"
+before anyone builds fusion on top of it — if the probe is at chance, the
+problem is here, not in the fusion module. And it gives the report its
+ablation row: the fused system has to beat each stream alone, or the fusion
+is not earning its complexity.
+
+It is a floor, not a ceiling. A small head on frozen features will score
+below the fused system; that is the expected result, not a failure.

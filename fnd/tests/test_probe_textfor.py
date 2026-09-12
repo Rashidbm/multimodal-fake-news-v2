@@ -1,0 +1,121 @@
+"""Probe tests on synthetic features: no Qwen2, no GPU, no downloads.
+
+The probe is what turns v_textfor into numbers a supervisor can read, so the
+things worth pinning down are that it joins features to labels by id rather
+than row order, that it refuses a mismatched pair instead of scoring
+nonsense, and that it actually learns when the signal is there.
+"""
+import csv
+import json
+
+import pytest
+
+torch = pytest.importorskip("torch")
+
+from fnd.data.records import GROUPS
+from fnd.metrics import confusion_matrix, format_confusion
+from fnd.probe_textfor import ProbeHead, baselines, load_aligned, main as probe_main
+
+
+def _make_dataset(tmp_path, n_per_class=60, dim=32, separable=True, shuffle_features=False):
+    """A CSV plus a matching feature file, with one cluster per scenario."""
+    torch.manual_seed(0)
+    rows, feats, ids = [], [], []
+    for gi, group in enumerate(GROUPS):
+        centre = torch.zeros(dim)
+        centre[gi] = 6.0 if separable else 0.0
+        for k in range(n_per_class):
+            sid = f"s_{gi}_{k:03d}"
+            ids.append(sid)
+            feats.append(centre + torch.randn(dim) * 0.5)
+            rows.append({
+                "sample_id": sid,
+                "scenario": gi + 1,
+                "label_index": gi,
+                "label_binary": 0 if group == "genuine" else 1,
+                "split": "train" if k % 5 < 3 else ("val" if k % 5 == 3 else "test"),
+            })
+
+    csv_path = tmp_path / "rows.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+
+    x = torch.stack(feats)
+    if shuffle_features:
+        # feature rows in a different order than the CSV: the join must still
+        # line each vector up with its own label
+        perm = torch.randperm(len(ids))
+        x, ids = x[perm], [ids[i] for i in perm.tolist()]
+
+    fpath = tmp_path / "v_textfor.pt"
+    torch.save({"sample_ids": ids, "features": x,
+                "splits": ["" for _ in ids], "meta": {"model_name": "synthetic"}}, fpath)
+    return fpath, csv_path
+
+
+def test_head_shapes():
+    assert ProbeHead(3584, 1)(torch.randn(4, 3584)).shape == (4, 1)
+    assert ProbeHead(3584, 5)(torch.randn(4, 3584)).shape == (4, 5)
+
+
+def test_load_aligned_matches_labels_by_id(tmp_path):
+    """Feature rows shuffled relative to the CSV must still get their own
+    labels - the failure this guards against is silent, not an exception."""
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=4, dim=8, shuffle_features=True)
+    d = load_aligned(fpath, csv_path)
+    for sid, yi in zip(d["ids"], d["y_idx"].tolist()):
+        assert sid.startswith(f"s_{yi}_")
+
+
+def test_load_aligned_rejects_a_mismatched_pair(tmp_path):
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=3, dim=8)
+    payload = torch.load(fpath, weights_only=False)
+    payload["sample_ids"] = [s + "_stale" for s in payload["sample_ids"]]
+    torch.save(payload, fpath)
+    with pytest.raises(KeyError, match="not in the CSV"):
+        load_aligned(fpath, csv_path)
+
+
+def test_baselines():
+    b = baselines([0, 0, 0, 1], [0, 0, 1, 1], 2, seed=0)
+    assert b["majority_class"] == 0 and b["majority_accuracy"] == 0.5
+    assert baselines([0, 1, 2, 3, 4], [0, 1, 2, 3, 4], 5, seed=0)["random_expected"] == 0.2
+
+
+def test_confusion_matrix_and_format():
+    m = confusion_matrix([0, 0, 1, 2], [0, 1, 1, 2], 3)
+    assert m == [[1, 1, 0], [0, 1, 0], [0, 0, 1]]
+    assert sum(sum(r) for r in m) == 4
+    assert "genuine" in format_confusion(m, ["genuine", "ooc", "fake"])
+
+
+def test_probe_learns_separable_features(tmp_path):
+    """Clusters this clean must score far above the 0.2 random baseline; if
+    they do not, the training loop is broken rather than the features."""
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=60, dim=32, separable=True)
+    out = tmp_path / "probe"
+    assert probe_main(["--features", str(fpath), "--csv", str(csv_path), "--out", str(out),
+                       "--epochs", "40", "--device", "cpu"]) == 0
+
+    r = json.loads((out / "metrics.json").read_text())
+    assert r["multiclass"]["accuracy"] > 0.9
+    assert r["multiclass"]["accuracy"] > r["multiclass"]["baselines"]["majority_accuracy"]
+    assert r["binary"]["accuracy"] > 0.9
+    assert r["binary"]["auc"] > 0.9
+
+    cm = r["multiclass"]["confusion_matrix"]
+    assert sum(sum(row) for row in cm) == r["multiclass"]["n"]
+    assert (out / "predictions.csv").exists() and (out / "report.txt").exists()
+
+
+def test_probe_reports_chance_on_noise(tmp_path):
+    """With no signal in the features the probe must land near chance, not
+    invent accuracy - a guard against label leakage through the split."""
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=40, dim=16, separable=False)
+    out = tmp_path / "probe_noise"
+    assert probe_main(["--features", str(fpath), "--csv", str(csv_path), "--out", str(out),
+                       "--epochs", "20", "--device", "cpu"]) == 0
+    r = json.loads((out / "metrics.json").read_text())
+    assert r["multiclass"]["accuracy"] < 0.5          # chance is 0.2

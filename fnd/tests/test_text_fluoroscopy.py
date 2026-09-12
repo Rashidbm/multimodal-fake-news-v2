@@ -70,16 +70,16 @@ def test_pooling_rejects_mismatched_mask():
 # --- 4.5 projection --------------------------------------------------------
 
 def test_projection_shape_and_dims():
-    proj = TextForensicProjection(4096, 768)          # Qwen2-7B -> fusion space
-    out = proj(torch.randn(6, 4096))
+    proj = TextForensicProjection(3584, 768)          # Qwen2-7B -> fusion space
+    out = proj(torch.randn(6, 3584))
     assert out.shape == (6, 768) and torch.isfinite(out).all()
     assert TextForensicProjection(896, 768)(torch.randn(2, 896)).shape == (2, 768)
 
 
 def test_projection_rejects_unpooled_input():
-    proj = TextForensicProjection(4096, 768)
+    proj = TextForensicProjection(3584, 768)
     with pytest.raises(ValueError):
-        proj(torch.randn(2, 10, 4096))                # forgot to pool
+        proj(torch.randn(2, 10, 3584))                # forgot to pool
     with pytest.raises(ValueError):
         proj(torch.randn(2, 512))                     # wrong hidden size
 

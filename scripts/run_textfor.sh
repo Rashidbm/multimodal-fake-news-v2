@@ -8,7 +8,7 @@
 # Needs data/processed/balanced_5group.csv from scripts/run_dataset.sh.
 # Downloads Qwen2-7B-Instruct (~15 GB) into ~/.cache/huggingface on first run;
 # if the repo is gated, run `huggingface-cli login` once on this machine.
-# Output in features/v_textfor.pt (gitignored - it is regenerated, not shared).
+# Output in features/v_textfor.pt (gitignored) and outputs/textfor_probe/.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -45,3 +45,10 @@ $PY -m fnd.extract_textfor --csv "$CSV" --out features/v_textfor.pt "$@"
 
 echo "===== meta ====="
 cat features/v_textfor.json
+
+# The extractor produces vectors, not predictions. The probe trains a small
+# head on them and reports what this stream scores on its own, beside the
+# baselines, so the number can be read as good or bad.
+echo "===== probe (scores for this stream alone) ====="
+$PY -m fnd.probe_textfor --features features/v_textfor.pt --csv "$CSV" \
+    --out outputs/textfor_probe

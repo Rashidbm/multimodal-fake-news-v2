@@ -59,6 +59,26 @@ def multiclass_metrics(y_true: list[int], y_pred: list[int], num_classes: int) -
     return {"n": n, "accuracy": acc, "f1_macro": sum(f1s) / num_classes, "f1_per_class": f1s}
 
 
+def confusion_matrix(y_true: list[int], y_pred: list[int], num_classes: int) -> list[list[int]]:
+    """m[t][p] = how many samples of true class t were predicted as p."""
+    m = [[0] * num_classes for _ in range(num_classes)]
+    for t, p in zip(y_true, y_pred):
+        m[int(t)][int(p)] += 1
+    return m
+
+
+def format_confusion(m: list[list[int]], labels: list[str] | None = None) -> str:
+    """Render a confusion matrix as a text table (rows = true, cols = predicted)."""
+    n = len(m)
+    labels = labels or [str(i) for i in range(n)]
+    w = max(max(len(l) for l in labels), max((len(str(v)) for row in m for v in row), default=1), 5)
+    head = " " * (w + 2) + " ".join(f"{l[:w]:>{w}}" for l in labels)
+    lines = [head, " " * (w + 2) + " ".join("-" * w for _ in labels)]
+    for i, row in enumerate(m):
+        lines.append(f"{labels[i][:w]:>{w}} | " + " ".join(f"{v:>{w}}" for v in row))
+    return "\n".join(lines)
+
+
 def per_scenario_accuracy(scenarios: list[int], y_true: list[int], y_pred: list[int]) -> dict:
     hit, tot = defaultdict(int), defaultdict(int)
     for s, t, p in zip(scenarios, y_true, y_pred):
