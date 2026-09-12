@@ -12,7 +12,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from fnd.data.records import GROUPS
+from fnd.data.records import GROUP_FLAGS, GROUPS
 from fnd.metrics import confusion_matrix, format_confusion
 from fnd.probe_textfor import ProbeHead, baselines, load_aligned, main as probe_main
 
@@ -28,11 +28,15 @@ def _make_dataset(tmp_path, n_per_class=60, dim=32, separable=True, shuffle_feat
             sid = f"s_{gi}_{k:03d}"
             ids.append(sid)
             feats.append(centre + torch.randn(dim) * 0.5)
+            text_fake, image_fake, ooc = GROUP_FLAGS[group]
             rows.append({
                 "sample_id": sid,
                 "scenario": gi + 1,
                 "label_index": gi,
                 "label_binary": 0 if group == "genuine" else 1,
+                "text_fake": text_fake,
+                "image_fake": image_fake,
+                "ooc": ooc,
                 "split": "train" if k % 5 < 3 else ("val" if k % 5 == 3 else "test"),
             })
 
@@ -76,6 +80,34 @@ def test_load_aligned_rejects_a_mismatched_pair(tmp_path):
     torch.save(payload, fpath)
     with pytest.raises(KeyError, match="not in the CSV"):
         load_aligned(fpath, csv_path)
+
+
+def test_text_fake_and_label_binary_differ(tmp_path):
+    """The two binary targets are not the same question: an out-of-context
+    pair is label_binary=1 with genuinely human text_fake=0.  Scoring this
+    stream against label_binary alone would ask it to call real writing fake."""
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=5, dim=8)
+    d = load_aligned(fpath, csv_path)
+    pairs = {(sid.split("_")[1], int(b), int(t))
+             for sid, b, t in zip(d["ids"], d["y_bin"].tolist(), d["y_txt"].tolist())}
+    ooc = GROUPS.index("ooc")
+    assert (str(ooc), 1, 0) in pairs                    # fake post, human caption
+    rtfi = GROUPS.index("real_text_fake_image")
+    assert (str(rtfi), 1, 0) in pairs                   # fake post, human caption
+    ftri = GROUPS.index("fake_text_real_image")
+    assert (str(ftri), 1, 1) in pairs                   # fake post, machine caption
+    assert not d["y_bin"].equal(d["y_txt"])
+
+
+def test_probe_reports_both_binary_tasks(tmp_path):
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=40, dim=16, separable=True)
+    out = tmp_path / "probe_two"
+    assert probe_main(["--features", str(fpath), "--csv", str(csv_path), "--out", str(out),
+                       "--epochs", "20", "--device", "cpu"]) == 0
+    r = json.loads((out / "metrics.json").read_text())
+    assert "text_fake" in r and "binary" in r
+    assert r["text_fake"]["accuracy"] > 0.9             # its own question, learnable
+    assert "per_scenario_text_fake" in r
 
 
 def test_baselines():

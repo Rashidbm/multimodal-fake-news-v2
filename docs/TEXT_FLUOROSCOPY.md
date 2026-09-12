@@ -200,17 +200,41 @@ python -m fnd.probe_textfor --features features/v_textfor.pt \
 ```
 
 The head is the paper's: three fully connected layers with Tanh
-(H → 1024 → 512 → out). A binary real/fake head and a 5-class scenario head
-are trained in the same run, so both numbers come from the same features and
-the same splits. Features are standardised with **train** statistics only —
-computing mean and variance over the whole set would leak test information.
+(H → 1024 → 512 → out). Features are standardised with **train** statistics
+only — computing mean and variance over the whole set would leak test
+information into the features.
 
-Reported: binary accuracy / precision / recall / F1 / AUC, 5-class accuracy
-and macro-F1, F1 per class, a confusion matrix, and binary accuracy inside
-each scenario. Every score sits beside a majority-class and a random baseline
-on the same test split, because an accuracy figure cannot be judged without
-knowing what guessing would score. Written to `metrics.json`,
-`predictions.csv` and `report.txt`.
+### Which binary label, and why it matters
+
+Three heads train in one run, on the same features and splits:
+
+| Target | Question | Read it as |
+|---|---|---|
+| `text_fake` | was the **caption** machine-written? | **this stream's score** |
+| `label_binary` | is the **post** fake? | the gap, not a grade |
+| 5-class | which of the five scenarios? | what fusion has to beat |
+
+The distinction is easy to miss and changes the conclusion. `label_binary`
+means "genuine vs everything else", so it is 1 for an out-of-context pair and
+for a real caption with a tampered image — both of which have **genuine
+human-written text**. Qwen cannot see an image or a mismatched pairing, so
+scoring this stream against `label_binary` asks it to call real human writing
+"fake" in two of the five scenarios. Working features would look broken.
+
+`text_fake` is 1 only for `fake_text_real_image` and `fake_text_fake_image` —
+the two scenarios whose captions are actually machine-written. That is the
+number that says whether this stream works.
+
+`label_binary` is still reported, because the gap between the two is the
+honest statement of what one stream can and cannot contribute, and it is the
+argument for why fusion is needed at all.
+
+Reported for each: accuracy / precision / recall / F1 / AUC (binary),
+accuracy and macro-F1 and F1 per class (5-class), a confusion matrix, and
+`text_fake` accuracy inside each scenario. Every score sits beside a
+majority-class and a random baseline on the same test split, because an
+accuracy figure cannot be judged without knowing what guessing would score.
+Written to `metrics.json`, `predictions.csv` and `report.txt`.
 
 Two things this is for. It answers "does this stream carry signal at all?"
 before anyone builds fusion on top of it — if the probe is at chance, the

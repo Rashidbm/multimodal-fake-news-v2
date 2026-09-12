@@ -10,9 +10,20 @@ small head on the cached features and reports what Qwen2 alone can do,
 before any fusion with the image or semantic streams.
 
 The head follows the Text Fluoroscopy paper: three fully connected layers
-with Tanh (H -> 1024 -> 512 -> out).  Two are trained in one run - a binary
-real/fake head and a 5-class scenario head - so both numbers come from the
-same features and the same splits.
+with Tanh (H -> 1024 -> 512 -> out).  Three are trained in one run, on the
+same features and the same splits:
+
+    text_fake     was the CAPTION machine-written.  This stream's own
+                  question, and the number that says whether it works.
+    label_binary  is the POST fake.  True for out-of-context and
+                  tampered-image pairs whose captions are genuine human
+                  prose, so it is partly unanswerable from text alone;
+                  reported to show the gap, not to grade this stream.
+    5-class       the five scenarios.
+
+Scoring this stream against label_binary alone would make working features
+look broken: it asks Qwen to call real human writing "fake" whenever the
+image or the pairing is the thing that is wrong.
 
 Every score is printed beside a majority-class and a random baseline on the
 same test split, because "68% accuracy" means nothing until you know that
@@ -92,11 +103,12 @@ def load_aligned(features_path: str | Path, csv_path: str | Path) -> dict:
             f"(first: {missing[:3]}). The features were extracted from a different build."
         )
 
-    keep, y_bin, y_idx, scen, splits = [], [], [], [], []
+    keep, y_bin, y_txt, y_idx, scen, splits = [], [], [], [], [], []
     for pos, sid in enumerate(ids):
         r = rows[sid]
         keep.append(pos)
         y_bin.append(int(r["label_binary"]))
+        y_txt.append(int(r["text_fake"]))
         y_idx.append(int(r["label_index"]))
         scen.append(int(r["scenario"]))
         splits.append(r["split"])
@@ -105,6 +117,7 @@ def load_aligned(features_path: str | Path, csv_path: str | Path) -> dict:
         "ids": [ids[p] for p in keep],
         "x": feats[keep].float(),
         "y_bin": torch.tensor(y_bin, dtype=torch.float32),
+        "y_txt": torch.tensor(y_txt, dtype=torch.float32),
         "y_idx": torch.tensor(y_idx, dtype=torch.long),
         "scenario": scen,
         "split": splits,
@@ -244,27 +257,43 @@ def main(argv=None) -> int:
     results: dict = {"features": m, "splits": {
         "train": int(tr.sum()), "val": int(va.sum()), "test": int(te.sum())}}
 
-    # ---- binary real/fake -------------------------------------------------
-    log()
-    log("-" * 66)
-    log("BINARY  (real vs fake; only 'genuine' counts as real)")
-    log("-" * 66)
-    head_b = train_head(x[tr], y_bin[tr], x[va], y_bin[va], 1, args.epochs, args.lr,
-                        args.patience, args.batch_size, device, args.seed, log)
-    with torch.no_grad():
-        prob_te = torch.sigmoid(head_b(x[te])).squeeze(1).cpu().tolist()
-    yb_te = y_bin[te].cpu().int().tolist()
-    bm = binary_metrics(yb_te, prob_te)
-    bb = baselines(y_bin[tr].cpu().int().tolist(), yb_te, 2, args.seed)
-    results["binary"] = {**bm, "baselines": bb}
+    # ---- the two binary tasks ---------------------------------------------
+    # text_fake is this stream's own question: was the CAPTION machine-written.
+    # label_binary is the system's question: is the POST fake, which is true for
+    # out-of-context and tampered-image pairs whose captions are genuine human
+    # prose.  Qwen cannot see an image or a mismatched pairing, so the second
+    # target is partly unanswerable from text alone - reported so the gap
+    # between the two is visible, not as a measure of this stream's quality.
+    def run_binary(key: str, title: str, y: torch.Tensor):
+        log()
+        log("-" * 66)
+        log(title)
+        log("-" * 66)
+        head = train_head(x[tr], y[tr], x[va], y[va], 1, args.epochs, args.lr,
+                          args.patience, args.batch_size, device, args.seed, log)
+        with torch.no_grad():
+            prob = torch.sigmoid(head(x[te])).squeeze(1).cpu().tolist()
+        y_te = y[te].cpu().int().tolist()
+        met = binary_metrics(y_te, prob)
+        base = baselines(y[tr].cpu().int().tolist(), y_te, 2, args.seed)
+        results[key] = {**met, "baselines": base}
 
-    log()
-    log(f"  accuracy   {bm['accuracy']:.4f}      (majority baseline {bb['majority_accuracy']:.4f})")
-    log(f"  precision  {bm['precision']:.4f}")
-    log(f"  recall     {bm['recall']:.4f}")
-    log(f"  F1         {bm['f1']:.4f}")
-    log(f"  AUC        {bm['auc']:.4f}      (chance 0.5000)")
-    log(f"  tp {bm['tp']}  tn {bm['tn']}  fp {bm['fp']}  fn {bm['fn']}")
+        log()
+        log(f"  accuracy   {met['accuracy']:.4f}      (majority baseline {base['majority_accuracy']:.4f})")
+        log(f"  precision  {met['precision']:.4f}")
+        log(f"  recall     {met['recall']:.4f}")
+        log(f"  F1         {met['f1']:.4f}")
+        log(f"  AUC        {met['auc']:.4f}      (chance 0.5000)")
+        log(f"  tp {met['tp']}  tn {met['tn']}  fp {met['fp']}  fn {met['fn']}")
+        return prob, y_te
+
+    prob_txt, ytxt_te = run_binary(
+        "text_fake", "TEXT_FAKE  (was the caption machine-written - this stream's own task)",
+        data["y_txt"].to(device))
+
+    prob_te, yb_te = run_binary(
+        "binary", "LABEL_BINARY  (is the post fake - the system's task, not answerable from text alone)",
+        y_bin)
 
     # ---- 5-class scenario --------------------------------------------------
     log()
@@ -297,25 +326,29 @@ def main(argv=None) -> int:
     log(format_confusion(cm, [short_label(g) for g in GROUPS]))
     log("    " + "   ".join(f"{short_label(g)}={g}" for g in GROUPS))
 
-    # ---- per scenario, binary decision -------------------------------------
-    bin_pred_te = [1 if p >= 0.5 else 0 for p in prob_te]
-    ps = per_scenario_accuracy(scen_te, yb_te, bin_pred_te)
-    results["per_scenario_binary"] = ps
+    # ---- per scenario -------------------------------------------------------
+    txt_pred_te = [1 if p >= 0.5 else 0 for p in prob_txt]
+    ps = per_scenario_accuracy(scen_te, ytxt_te, txt_pred_te)
+    results["per_scenario_text_fake"] = ps
     log()
-    log("  binary accuracy inside each scenario (which fake type is missed):")
+    log("  text_fake accuracy inside each scenario (which caption type is missed):")
     for s, d in ps.items():
         log(f"    {s} {GROUPS[s-1]:<22} n={d['n']:<6} acc {d['accuracy']:.4f}")
+
+    bin_pred_te = [1 if p >= 0.5 else 0 for p in prob_te]
+    results["per_scenario_binary"] = per_scenario_accuracy(scen_te, yb_te, bin_pred_te)
 
     # ---- write -------------------------------------------------------------
     (out_dir / "metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     with open(out_dir / "predictions.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["sample_id", "scenario", "label_binary", "prob_fake",
-                    "pred_binary", "label_index", "pred_index"])
+        w.writerow(["sample_id", "scenario", "text_fake", "prob_text_fake", "pred_text_fake",
+                    "label_binary", "prob_fake", "pred_binary", "label_index", "pred_index"])
         ids_te = [i for i, k in zip(data["ids"], te.tolist()) if k]
-        for sid, s, yb, pr, pb, yi, pi in zip(ids_te, scen_te, yb_te, prob_te,
-                                              bin_pred_te, yi_te, pred_te):
-            w.writerow([sid, s, yb, f"{pr:.6f}", pb, yi, pi])
+        for row in zip(ids_te, scen_te, ytxt_te, prob_txt, txt_pred_te,
+                       yb_te, prob_te, bin_pred_te, yi_te, pred_te):
+            sid, s, yt, pt, qt, yb, pr, pb, yi, pi = row
+            w.writerow([sid, s, yt, f"{pt:.6f}", qt, yb, f"{pr:.6f}", pb, yi, pi])
 
     log()
     log("=" * 66)
