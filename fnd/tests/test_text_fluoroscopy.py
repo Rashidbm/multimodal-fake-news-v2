@@ -186,3 +186,20 @@ def test_extract_end_to_end_smoke(tmp_path):
     assert payload["sample_ids"] == [f"mmfb_{i:04d}" for i in range(4)]
     assert payload["meta"]["pooling"] == "masked_mean"
     assert payload["meta"]["projected"] is False
+
+
+def test_limit_spreads_across_the_file():
+    """build.py writes the CSV grouped by scenario, so the first N rows would
+    be one class. --limit must sample across the file instead, or the subset
+    handed to the fusion stage would contain a single scenario."""
+    from fnd.extract_textfor import evenly_spaced
+
+    rows = [{"sample_id": f"s{i}", "group": g}
+            for g in ("ooc", "ftri", "rtfi", "genuine", "ftfi")
+            for i in range(100)]
+
+    picked = evenly_spaced(rows, 10)
+    assert len(picked) == 10
+    assert len({r["group"] for r in picked}) == 5      # every scenario present
+    assert evenly_spaced(rows, 999) is rows            # limit >= len is a no-op
+    assert len(evenly_spaced(rows, 1)) == 1

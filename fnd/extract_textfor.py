@@ -53,6 +53,21 @@ def read_rows(csv_path: str | Path, split: str | None = None) -> list[dict]:
     return rows
 
 
+def evenly_spaced(rows: list[dict], limit: int) -> list[dict]:
+    """Take `limit` rows spread across the file, not the first `limit`.
+
+    build.py writes the CSV grouped by scenario (all ooc, then all
+    fake_text_real_image, ...), so rows[:200] would be 200 rows of one class
+    from one part of the split. A stride keeps every scenario and every split
+    represented, which is what makes a subset usable as a stand-in for the
+    full file while the real extraction runs.
+    """
+    if limit >= len(rows):
+        return rows
+    step = len(rows) / limit
+    return [rows[int(i * step)] for i in range(limit)]
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Extract v_textfor with a frozen Qwen (Text Fluoroscopy).")
     ap.add_argument("--csv", required=True, help="built CSV, e.g. data/processed/balanced_5group.csv")
@@ -67,7 +82,9 @@ def main(argv=None) -> int:
     ap.add_argument("--dtype", default="auto", choices=["auto", "bfloat16", "float16", "float32"])
     ap.add_argument("--device", default="auto")
     ap.add_argument("--split", default=None, help="only this split; default = all rows")
-    ap.add_argument("--limit", type=int, default=None, help="debug: only the first N rows")
+    ap.add_argument("--limit", type=int, default=None,
+                    help="only N rows, spread evenly across the file so every "
+                         "scenario and split stays represented")
     ap.add_argument("--truncate-layers", action="store_true",
                     help="drop the layers above --layer (~6%% faster; verify it reproduces "
                          "an untruncated run on this model first)")
@@ -78,7 +95,7 @@ def main(argv=None) -> int:
 
     rows = read_rows(args.csv, args.split)
     if args.limit:
-        rows = rows[: args.limit]
+        rows = evenly_spaced(rows, args.limit)
 
     cfg = TextFluoroscopyConfig(
         model_name=args.model, layer=args.layer, max_len=args.max_len,
