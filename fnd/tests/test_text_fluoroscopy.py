@@ -17,6 +17,7 @@ from fnd.models.text_fluoroscopy import (
     TextFluoroscopy,
     TextFluoroscopyConfig,
     TextForensicProjection,
+    config_int,
     masked_mean_pool,
     resolve_layer,
 )
@@ -121,20 +122,33 @@ def test_padding_does_not_change_a_row(tiny):
     assert torch.allclose(alone, padded, atol=1e-4)
 
 
-def test_layer_truncation_keeps_the_same_vector():
-    """Truncation is an optimisation, not a change of output."""
-    torch.manual_seed(0)
-    full = TextFluoroscopy(TextFluoroscopyConfig(pretrained=False, layer=2, truncate_layers=False))
-    torch.manual_seed(0)
-    cut = TextFluoroscopy(TextFluoroscopyConfig(pretrained=False, layer=2, truncate_layers=True))
-    cut.model.load_state_dict(
-        {k: v for k, v in full.model.state_dict().items() if k in cut.model.state_dict()},
-        strict=False,
-    )
-    ids = torch.randint(1, 200, (2, 9))
-    mask = torch.ones(2, 9, dtype=torch.long)
-    assert cut._truncated and not full._truncated
-    assert torch.allclose(full.encode(ids, mask), cut.encode(ids, mask), atol=1e-5)
+def test_dims_are_measured_from_a_forward_pass(tiny):
+    """hidden_size and num_layers come from a real forward pass, not the config.
+
+    Qwen3.5 nests its dimensions inside sub-configs, so `config.hidden_size`
+    raises AttributeError and anything that trusts it dies on model load.
+    Measuring makes the extractor architecture-agnostic; this pins the
+    measured values to what a config that DOES expose them reports.
+    """
+    assert (tiny.num_layers, tiny.hidden_size) == (4, 64)
+    assert tiny.measure_shape() == (4, 64)
+    assert tiny.config_agrees
+
+
+def test_config_int_reaches_into_nested_configs():
+    """A config that hides hidden_size one level down is still readable."""
+    class Sub:
+        hidden_size = 4096
+
+    class Nested:
+        text_config = Sub()
+
+    class Bare:
+        pass
+
+    assert config_int(Nested(), "hidden_size") == 4096
+    assert config_int(Sub(), "hidden_size", "d_model") == 4096
+    assert config_int(Bare(), "hidden_size") is None      # None, never a guess
 
 
 # --- CSV reading + the saved artefact --------------------------------------
@@ -162,8 +176,20 @@ def test_read_rows_rejects_duplicate_ids(tmp_path):
 
 def test_read_rows_filters_split(tmp_path):
     p = _write_csv(tmp_path / "rows.csv")
-    assert len(read_rows(p)) == 6
-    assert all(r["split"] == "test" for r in read_rows(p, "test"))
+    rows, id_col = read_rows(p)
+    assert len(rows) == 6 and id_col == "sample_id"
+    assert all(r["split"] == "test" for r in read_rows(p, "test")[0])
+
+
+def test_read_rows_accepts_the_spec_id_column(tmp_path):
+    """The guidelines key rows by text_asset_id, the repo build by sample_id."""
+    p = tmp_path / "spec.csv"
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["text_asset_id", "text", "split"])
+        w.writeheader()
+        w.writerow({"text_asset_id": "t_0", "text": "a caption", "split": "train"})
+    rows, id_col = read_rows(p)
+    assert id_col == "text_asset_id" and len(rows) == 1
 
 
 def test_extract_end_to_end_smoke(tmp_path):

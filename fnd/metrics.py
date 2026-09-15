@@ -85,3 +85,16 @@ def per_scenario_accuracy(scenarios: list[int], y_true: list[int], y_pred: list[
         tot[s] += 1
         hit[s] += int(t == p)
     return {int(s): {"n": tot[s], "accuracy": hit[s] / tot[s]} for s in sorted(tot)}
+
+
+def per_group_accuracy(keys: list, y_true: list[int], y_pred: list[int]) -> dict:
+    """Accuracy inside each group, for any key type (scenario, sub-category).
+
+    Same idea as per_scenario_accuracy but keeps the key as given, so a
+    breakdown by source folder or domain does not have to be an integer.
+    """
+    hit, tot = defaultdict(int), defaultdict(int)
+    for k, t, p in zip(keys, y_true, y_pred):
+        tot[k] += 1
+        hit[k] += int(t == p)
+    return {k: {"n": tot[k], "accuracy": hit[k] / tot[k]} for k in sorted(tot, key=str)}

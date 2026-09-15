@@ -89,15 +89,55 @@ def test_text_fake_and_label_binary_differ(tmp_path):
     stream against label_binary alone would ask it to call real writing fake."""
     fpath, csv_path = _make_dataset(tmp_path, n_per_class=5, dim=8)
     d = load_aligned(fpath, csv_path)
+    y_bin, y_txt = d["targets"]["binary"], d["targets"]["text_fake"]
     pairs = {(sid.split("_")[1], int(b), int(t))
-             for sid, b, t in zip(d["ids"], d["y_bin"].tolist(), d["y_txt"].tolist())}
+             for sid, b, t in zip(d["ids"], y_bin.tolist(), y_txt.tolist())}
     ooc = GROUPS.index("ooc")
     assert (str(ooc), 1, 0) in pairs                    # fake post, human caption
     rtfi = GROUPS.index("real_text_fake_image")
     assert (str(rtfi), 1, 0) in pairs                   # fake post, human caption
     ftri = GROUPS.index("fake_text_real_image")
     assert (str(ftri), 1, 1) in pairs                   # fake post, machine caption
-    assert not d["y_bin"].equal(d["y_txt"])
+    assert not y_bin.equal(y_txt)
+
+
+def test_label_columns_are_optional(tmp_path):
+    """The delivered dataset carries only text_asset_id, text, split, text_fake.
+
+    The probe must run on that rather than demanding label_binary, scenario
+    and label_index, which only the repo's own build writes.
+    """
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=5, dim=8)
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    slim = tmp_path / "slim.csv"
+    with open(slim, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["text_asset_id", "split", "text_fake"])
+        w.writeheader()
+        for r in rows:
+            w.writerow({"text_asset_id": r["sample_id"], "split": r["split"],
+                        "text_fake": r["text_fake"]})
+
+    payload = torch.load(fpath, weights_only=False)
+    payload["ids"] = payload.pop("sample_ids")
+    torch.save(payload, fpath)
+
+    d = load_aligned(fpath, slim)
+    assert d["id_column"] == "text_asset_id"
+    assert set(d["targets"]) == {"text_fake"}
+    assert d["y_idx"] is None and d["scenario"] is None
+
+
+def test_where_restricts_to_one_slice(tmp_path):
+    """--where is the domain-matched control: same topic, different authorship."""
+    fpath, csv_path = _make_dataset(tmp_path, n_per_class=5, dim=8)
+    d_all = load_aligned(fpath, csv_path)
+    d_one = load_aligned(fpath, csv_path, where="scenario=1")
+    assert 0 < len(d_one["ids"]) < len(d_all["ids"])
+    assert d_one["x"].shape[0] == len(d_one["ids"])      # features filtered with the ids
+    assert all(s == 1 for s in d_one["scenario"])
+    with pytest.raises(ValueError, match="matched no rows"):
+        load_aligned(fpath, csv_path, where="scenario=99")
 
 
 def test_probe_reports_both_binary_tasks(tmp_path):

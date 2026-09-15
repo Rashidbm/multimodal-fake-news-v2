@@ -6,32 +6,44 @@
 
 extract_textfor.py produces vectors, not predictions, so the stream has no
 accuracy of its own until something classifies those vectors.  This trains a
-small head on the cached features and reports what Qwen2 alone can do,
-before any fusion with the image or semantic streams.
+small head on the cached features and reports what the frozen LLM alone can
+do, before any fusion with the image or semantic streams.  The head is a
+diagnostic: its weights are never used again.
 
 The head follows the Text Fluoroscopy paper: three fully connected layers
-with Tanh (H -> 1024 -> 512 -> out).  Three are trained in one run, on the
-same features and the same splits:
+with Tanh (H -> 1024 -> 512 -> out).  Whichever of these the CSV carries are
+trained in one run, on the same features and the same splits:
 
-    text_fake     was the CAPTION machine-written.  This stream's own
-                  question, and the number that says whether it works.
-    label_binary  is the POST fake.  True for out-of-context and
-                  tampered-image pairs whose captions are genuine human
-                  prose, so it is partly unanswerable from text alone;
-                  reported to show the gap, not to grade this stream.
+    text_fake     is the CAPTION fake or edited - rumour, word edit OR
+                  generated.  This stream's own diagnostic target, and NOT
+                  a measure of AI authorship: a human-written false rumour
+                  has text_fake=1.
+    ai_text       was the caption machine-generated, derived from the source
+                  folder by scripts/enrich_provenance.py.  Blank rows (word
+                  edits, ambiguous provenance) are excluded, never guessed.
+    label_binary  is the POST fake.  True for out-of-context and tampered-
+                  image pairs whose captions are genuine human prose, so it
+                  is partly unanswerable from text alone; reported to show
+                  the gap, not to grade this stream.
     5-class       the five scenarios.
 
 Scoring this stream against label_binary alone would make working features
-look broken: it asks Qwen to call real human writing "fake" whenever the
+look broken: it asks the model to call real human writing "fake" whenever the
 image or the pairing is the thing that is wrong.
 
 Every score is printed beside a majority-class and a random baseline on the
 same test split, because "68% accuracy" means nothing until you know that
 guessing scores 20%.
 
+`--where COL=VALUE` restricts the run to one slice of the CSV.  That is the
+domain-matched control: `--where domain=gossip` holds the topic fixed and
+varies only the authorship, so the gap against the full score is the topic
+leakage.
+
 Outputs in --out:
     metrics.json        every number below, machine-readable
     predictions.csv     one row per test sample, for error analysis
+    split_ids.csv       which id landed in which split
     report.txt          the printed report
 """
 from __future__ import annotations
@@ -47,13 +59,27 @@ import torch
 import torch.nn as nn
 
 from fnd.data.records import GROUPS
+from fnd.extract_textfor import find_id_column
 from fnd.metrics import (
     binary_metrics,
     confusion_matrix,
     format_confusion,
     multiclass_metrics,
-    per_scenario_accuracy,
+    per_group_accuracy,
 )
+
+TARGETS = {
+    "text_fake": "is the caption fake or edited (rumour, edit OR generated) - not AI authorship",
+    "ai_text": "was the caption machine-generated, derived from the source folder",
+    "binary": "is the post fake - partly unanswerable from text alone",
+    "multiclass": "which of the five scenarios",
+}
+
+TITLES = {
+    "text_fake": "TEXT_FAKE  (is the caption fake or edited: rumour, edit OR generated)",
+    "ai_text": "AI_TEXT  (was the caption machine-generated - provenance-derived)",
+    "binary": "LABEL_BINARY  (is the post fake - not answerable from text alone)",
+}
 
 
 def short_label(group: str) -> str:
@@ -84,45 +110,83 @@ class ProbeHead(nn.Module):
 # data
 # ---------------------------------------------------------------------------
 
-def load_aligned(features_path: str | Path, csv_path: str | Path) -> dict:
-    """Join cached features to the CSV's labels by sample_id.
+def load_aligned(features_path: str | Path, csv_path: str | Path, where: str | None = None) -> dict:
+    """Join cached features to the CSV's labels by id.
 
     Joining by id rather than row order is the whole reason extract_textfor
-    saves sample_ids: the two files are produced by separate runs.
+    saves them: the two files are produced by separate runs.  Label columns
+    are optional - whichever are present become probe targets.
     """
     payload = torch.load(features_path, weights_only=False)
-    feats, ids = payload["features"], payload["sample_ids"]
+    feats = payload["features"]
+    ids = payload.get("ids") or payload["sample_ids"]
 
     with open(csv_path, newline="", encoding="utf-8") as f:
-        rows = {r["sample_id"]: r for r in csv.DictReader(f)}
+        all_rows = list(csv.DictReader(f))
+    if not all_rows:
+        raise ValueError(f"{csv_path} is empty")
+    id_col = find_id_column(all_rows[0])
 
-    missing = [i for i in ids if i not in rows]
-    if missing:
+    if where:
+        if "=" not in where:
+            raise ValueError("--where must look like COL=VALUE, e.g. domain=gossip")
+        wcol, wval = where.split("=", 1)
+        before = len(all_rows)
+        all_rows = [r for r in all_rows if str(r.get(wcol, "")) == wval]
+        if not all_rows:
+            raise ValueError(f"--where {where} matched no rows")
+        print(f"--where {where}: {len(all_rows)} of {before} rows")
+
+    rows = {r[id_col]: r for r in all_rows}
+    if where:
+        keep = [i in rows for i in ids]
+        if not any(keep):
+            raise ValueError(f"--where {where} left no rows that also have features")
+        feats = feats[torch.tensor(keep)]
+        ids = [i for i, k in zip(ids, keep) if k]
+    else:
+        missing = [i for i in ids if i not in rows]
+        if missing:
+            raise KeyError(
+                f"{len(missing)} ids in the feature file are not in the CSV "
+                f"(first: {missing[:3]}). The features came from a different build."
+            )
+
+    first = rows[ids[0]]
+
+    def have(name):
+        return name in first and str(first[name]) != ""
+
+    def col(name, cast=int):
+        return [cast(rows[i][name]) for i in ids]
+
+    targets: dict[str, torch.Tensor] = {}
+    if have("text_fake"):
+        targets["text_fake"] = torch.tensor(col("text_fake"), dtype=torch.float32)
+    if have("ai_text"):
+        # blank = provenance excluded this row; -1 marks it and run_binary drops it
+        targets["ai_text"] = torch.tensor(
+            [int(rows[i]["ai_text"]) if str(rows[i]["ai_text"]).strip() != "" else -1
+             for i in ids], dtype=torch.float32)
+    if have("label_binary"):
+        targets["binary"] = torch.tensor(col("label_binary"), dtype=torch.float32)
+
+    y_idx = torch.tensor(col("label_index"), dtype=torch.long) if have("label_index") else None
+    if not targets and y_idx is None:
         raise KeyError(
-            f"{len(missing)} sample_ids in the feature file are not in the CSV "
-            f"(first: {missing[:3]}). The features were extracted from a different build."
+            "the CSV carries no label column. Expected at least one of: text_fake, "
+            "ai_text, label_binary, label_index (or a 'group' column to derive them from)"
         )
 
-    keep, y_bin, y_txt, y_idx, scen, splits, subcat = [], [], [], [], [], [], []
-    for pos, sid in enumerate(ids):
-        r = rows[sid]
-        keep.append(pos)
-        y_bin.append(int(r["label_binary"]))
-        y_txt.append(int(r["text_fake"]))
-        y_idx.append(int(r["label_index"]))
-        scen.append(int(r["scenario"]))
-        splits.append(r["split"])
-        subcat.append(r.get("subcategory", "") or r.get("source", "?"))
-
     return {
-        "ids": [ids[p] for p in keep],
-        "x": feats[keep].float(),
-        "y_bin": torch.tensor(y_bin, dtype=torch.float32),
-        "y_txt": torch.tensor(y_txt, dtype=torch.float32),
-        "y_idx": torch.tensor(y_idx, dtype=torch.long),
-        "scenario": scen,
-        "subcategory": subcat,
-        "split": splits,
+        "ids": ids,
+        "id_column": id_col,
+        "x": feats.float(),
+        "targets": targets,
+        "y_idx": y_idx,
+        "scenario": col("scenario") if have("scenario") else None,
+        "subcategory": [rows[i].get("subcategory") or "?" for i in ids],
+        "split": [rows[i]["split"] for i in ids],
         "meta": payload.get("meta", {}),
     }
 
@@ -141,21 +205,19 @@ def split_mask(data: dict, name: str) -> torch.Tensor:
 def class_weights(y: torch.Tensor, out_dim: int) -> torch.Tensor | None:
     """Re-weight the loss by inverse class frequency.
 
-    The five scenario groups are equal in size, but they do not divide
-    evenly by any binary question: text_fake is 2 groups against 3 (40/60),
+    The five scenario groups are equal in size, but they do not divide evenly
+    by any binary question: text_fake is 2 groups against 3 (40/60),
     label_binary is 1 against 4 (20/80).  Weighting the loss is the right
     lever here - dropping rows to force a 50/50 split would throw away real
-    examples and, because the same CSV feeds all three streams, would tear
-    the row set away from v_semantic and v_imgfor.
+    examples and, because the same CSV feeds all three streams, would tear the
+    row set away from v_semantic and v_imgfor.
     """
     if out_dim == 1:
-        pos = float((y == 1).sum())
-        neg = float((y == 0).sum())
+        pos, neg = float((y == 1).sum()), float((y == 0).sum())
         if pos == 0 or neg == 0:
             return None
         return torch.tensor([neg / pos], device=y.device)
-    counts = torch.bincount(y, minlength=out_dim).float()
-    counts = counts.clamp(min=1.0)
+    counts = torch.bincount(y, minlength=out_dim).float().clamp(min=1.0)
     return (counts.sum() / (out_dim * counts)).to(y.device)
 
 
@@ -194,9 +256,8 @@ def train_head(xtr, ytr, xva, yva, out_dim, epochs, lr, patience, batch_size,
         with torch.no_grad():
             logits = head(xva)
             if out_dim == 1:
-                pred = (torch.sigmoid(logits).squeeze(1) >= 0.5).float()
-                score = binary_metrics(yva.cpu().tolist(),
-                                       torch.sigmoid(logits).squeeze(1).cpu().tolist())["f1"]
+                prob = torch.sigmoid(logits).squeeze(1).cpu().tolist()
+                score = binary_metrics(yva.cpu().int().tolist(), prob)["f1"]
             else:
                 pred = logits.argmax(dim=1)
                 score = multiclass_metrics(yva.cpu().tolist(), pred.cpu().tolist(), out_dim)["f1_macro"]
@@ -218,25 +279,46 @@ def train_head(xtr, ytr, xva, yva, out_dim, epochs, lr, patience, batch_size,
     return head.eval()
 
 
-# ---------------------------------------------------------------------------
-# baselines
-# ---------------------------------------------------------------------------
+def best_threshold(y_true: list[int], prob: list[float]) -> float:
+    """The threshold maximising balanced accuracy on the validation split.
+
+    A fixed 0.5 assumes the training prior carries over. When the positive
+    rate differs between splits - as it does in this dataset - it does not,
+    and 0.5 quietly costs recall on the rarer class. Chosen on val, never on
+    test, so the reported test numbers stay honest.
+    """
+    if not y_true or len(set(y_true)) < 2:
+        return 0.5
+    best, best_score = 0.5, -1.0
+    for t in [i / 100 for i in range(5, 100, 5)]:
+        pred = [1 if p >= t else 0 for p in prob]
+        tp = sum(1 for a, b in zip(y_true, pred) if a == 1 and b == 1)
+        fn = sum(1 for a, b in zip(y_true, pred) if a == 1 and b == 0)
+        tn = sum(1 for a, b in zip(y_true, pred) if a == 0 and b == 0)
+        fp = sum(1 for a, b in zip(y_true, pred) if a == 0 and b == 1)
+        rp = tp / (tp + fn) if tp + fn else 0.0
+        rn = tn / (tn + fp) if tn + fp else 0.0
+        if (rp + rn) / 2 > best_score:
+            best, best_score = t, (rp + rn) / 2
+    return best
+
+
+def with_balanced(m: dict, threshold: float) -> dict:
+    """binary_metrics plus the figures that survive a shifting class prior."""
+    rn = m["tn"] / (m["tn"] + m["fp"]) if m["tn"] + m["fp"] else 0.0
+    return {**m, "threshold": threshold, "recall_positive": m["recall"],
+            "recall_negative": rn, "balanced_accuracy": (m["recall"] + rn) / 2}
+
 
 def baselines(y_train: list[int], y_test: list[int], num_classes: int, seed: int) -> dict:
     """What a classifier with no access to the features would score."""
     majority = max(set(y_train), key=y_train.count)
-    maj_acc = sum(1 for t in y_test if t == majority) / len(y_test)
-
     rng = random.Random(seed)
-    rand_pred = [rng.randrange(num_classes) for _ in y_test]
-    rand_acc = sum(1 for t, p in zip(y_test, rand_pred) if t == p) / len(y_test)
-
-    return {
-        "majority_class": majority,
-        "majority_accuracy": maj_acc,
-        "random_accuracy": rand_acc,
-        "random_expected": 1.0 / num_classes,
-    }
+    rand = [rng.randrange(num_classes) for _ in y_test]
+    return {"majority_class": majority,
+            "majority_accuracy": sum(1 for t in y_test if t == majority) / len(y_test),
+            "random_accuracy": sum(1 for t, p in zip(y_test, rand) if t == p) / len(y_test),
+            "random_expected": 1.0 / num_classes}
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +328,8 @@ def main(argv=None) -> int:
     ap.add_argument("--features", default="features/v_textfor.pt")
     ap.add_argument("--csv", required=True)
     ap.add_argument("--out", default="outputs/textfor_probe")
+    ap.add_argument("--where", default=None,
+                    help="restrict to one slice, e.g. domain=gossip (the domain-matched control)")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--batch-size", type=int, default=64)
@@ -267,149 +351,191 @@ def main(argv=None) -> int:
         print(msg)
         report.append(msg)
 
-    data = load_aligned(args.features, args.csv)
+    data = load_aligned(args.features, args.csv, args.where)
     tr, va, te = (split_mask(data, s) for s in ("train", "val", "test"))
-
-    log("=" * 66)
-    log("Text Fluoroscopy probe: what Qwen2 alone can do")
-    log("=" * 66)
     m = data["meta"]
-    log(f"features   {tuple(data['x'].shape)} from {m.get('model_name', '?')}, "
-        f"layer {m.get('layer_resolved', '?')}, {m.get('pooling', '?')} pooling")
-    log(f"splits     train {int(tr.sum())} / val {int(va.sum())} / test {int(te.sum())}")
-    log(f"device     {device}")
 
-    # Standardise with TRAIN statistics only: computing mean/std over the whole
-    # set would leak test information into the features.
+    log("=" * 68)
+    log("Text Fluoroscopy probe: what this stream alone can do")
+    log("=" * 68)
+    log(f"  features {tuple(data['x'].shape)} from {m.get('model_name', '?')}")
+    log(f"  layer    hidden_states[{m.get('layer_resolved', '?')}] of "
+        f"{m.get('num_layers', '?')}, {m.get('pooling', '?')} pooling")
+    log(f"  splits   train {int(tr.sum())} / val {int(va.sum())} / test {int(te.sum())}")
+    if args.where:
+        log(f"  slice    --where {args.where}")
+
+    # Standardise with TRAIN statistics only: whole-set statistics would leak
+    # test information into the features.
     x = data["x"]
     mu, sd = x[tr].mean(0, keepdim=True), x[tr].std(0, keepdim=True).clamp(min=1e-6)
     x = ((x - mu) / sd).to(device)
 
-    y_bin, y_idx = data["y_bin"].to(device), data["y_idx"].to(device)
-    scen_te = [s for s, k in zip(data["scenario"], te.tolist()) if k]
-    results: dict = {"features": m, "splits": {
-        "train": int(tr.sum()), "val": int(va.sum()), "test": int(te.sum())}}
+    results: dict = {"features": m, "id_column": data["id_column"], "where": args.where,
+                     "splits": {"train": int(tr.sum()), "val": int(va.sum()), "test": int(te.sum())}}
 
-    # ---- the two binary tasks ---------------------------------------------
-    # text_fake is this stream's own question: was the CAPTION machine-written.
-    # label_binary is the system's question: is the POST fake, which is true for
-    # out-of-context and tampered-image pairs whose captions are genuine human
-    # prose.  Qwen cannot see an image or a mismatched pairing, so the second
-    # target is partly unanswerable from text alone - reported so the gap
-    # between the two is visible, not as a measure of this stream's quality.
     def run_binary(key: str, title: str, y: torch.Tensor):
-        log()
-        log("-" * 66)
-        log(title)
-        log("-" * 66)
-        head = train_head(x[tr], y[tr], x[va], y[va], 1, args.epochs, args.lr,
+        y = y.to(device)
+        log(); log("-" * 68); log(title); log("-" * 68)
+
+        rates = []
+        for name, msk in (("train", tr), ("val", va), ("test", te)):
+            mm = msk.to(device) & (y >= 0)
+            k = int(mm.sum())
+            rates.append((name, k, float(y[mm].mean()) if k else float("nan")))
+        log("    positive rate: " + "  ".join(f"{n} {r:.3f} (n={k})" for n, k, r in rates))
+        spread = max(r for _, _, r in rates) - min(r for _, _, r in rates)
+        if spread > 0.05:
+            log(f"    NOTE: the positive rate differs by {spread:.3f} across splits, so a")
+            log("          fixed 0.5 threshold is miscalibrated. AUC and balanced accuracy")
+            log("          are the figures to quote; the threshold below is picked on val.")
+
+        # -1 means "no defensible label for this row": excluded, never guessed.
+        known = y >= 0
+        if not known.all():
+            log(f"    {int((~known).sum())} rows have no label for this target and are excluded")
+        ktr, kva, kte = (msk.to(device) & known for msk in (tr, va, te))
+        if not (ktr.any() and kva.any() and kte.any()):
+            log("    skipped: not enough labelled rows in every split")
+            return None
+
+        head = train_head(x[ktr], y[ktr], x[kva], y[kva], 1, args.epochs, args.lr,
                           args.patience, args.batch_size, device, args.seed, log,
                           weighted=not args.no_class_weight)
         with torch.no_grad():
-            prob = torch.sigmoid(head(x[te])).squeeze(1).cpu().tolist()
-        y_te = y[te].cpu().int().tolist()
-        met = binary_metrics(y_te, prob)
-        base = baselines(y[tr].cpu().int().tolist(), y_te, 2, args.seed)
-        results[key] = {**met, "baselines": base}
+            prob = torch.sigmoid(head(x[kte])).squeeze(1).cpu().tolist()
+            prob_va = torch.sigmoid(head(x[kva])).squeeze(1).cpu().tolist()
+        y_te, y_va = y[kte].cpu().int().tolist(), y[kva].cpu().int().tolist()
+
+        # Choose the operating point on validation, never on test.
+        thr = best_threshold(y_va, prob_va)
+        met = with_balanced(binary_metrics(y_te, prob, threshold=thr), thr)
+        met_half = with_balanced(binary_metrics(y_te, prob), 0.5)
+        base = baselines(y[ktr].cpu().int().tolist(), y_te, 2, args.seed)
+        results[key] = {**met, "at_threshold_0.5": met_half,
+                        "threshold_selected_on": "val", "baselines": base,
+                        "positive_rate": {n: r for n, _, r in rates},
+                        "target": TARGETS[key]}
 
         log()
-        log(f"  accuracy   {met['accuracy']:.4f}      (majority baseline {base['majority_accuracy']:.4f})")
-        log(f"  precision  {met['precision']:.4f}")
-        log(f"  recall     {met['recall']:.4f}")
-        log(f"  F1         {met['f1']:.4f}")
-        log(f"  AUC        {met['auc']:.4f}      (chance 0.5000)")
+        log(f"  AUC          {met['auc']:.4f}      (chance 0.5000; prior-independent)")
+        log(f"  threshold    {thr:.3f}       (chosen on val, not test)")
+        log(f"  accuracy     {met['accuracy']:.4f}      "
+            f"(majority {base['majority_accuracy']:.4f}; at 0.5: {met_half['accuracy']:.4f})")
+        log(f"  balanced acc {met['balanced_accuracy']:.4f}")
+        log(f"  precision    {met['precision']:.4f}")
+        log(f"  recall  pos  {met['recall_positive']:.4f}   neg {met['recall_negative']:.4f}")
+        log(f"  F1           {met['f1']:.4f}")
         log(f"  tp {met['tp']}  tn {met['tn']}  fp {met['fp']}  fn {met['fn']}")
-        return prob, y_te
+        return prob, y_te, kte.cpu()
 
-    prob_txt, ytxt_te = run_binary(
-        "text_fake", "TEXT_FAKE  (was the caption machine-written - this stream's own task)",
-        data["y_txt"].to(device))
-
-    prob_te, yb_te = run_binary(
-        "binary", "LABEL_BINARY  (is the post fake - the system's task, not answerable from text alone)",
-        y_bin)
+    binary_out = {}
+    for key in ("text_fake", "ai_text", "binary"):
+        if key in data["targets"]:
+            got = run_binary(key, TITLES[key], data["targets"][key])
+            if got is not None:
+                binary_out[key] = got
 
     # ---- 5-class scenario --------------------------------------------------
-    log()
-    log("-" * 66)
-    log("5-CLASS  (the five scenarios)")
-    log("-" * 66)
-    head_m = train_head(x[tr], y_idx[tr], x[va], y_idx[va], len(GROUPS), args.epochs, args.lr,
-                        args.patience, args.batch_size, device, args.seed, log,
-                        weighted=not args.no_class_weight)
-    with torch.no_grad():
-        logits_te = head_m(x[te])
-        pred_te = logits_te.argmax(1).cpu().tolist()
-    yi_te = y_idx[te].cpu().tolist()
-    mm = multiclass_metrics(yi_te, pred_te, len(GROUPS))
-    mb = baselines(y_idx[tr].cpu().tolist(), yi_te, len(GROUPS), args.seed)
-    cm = confusion_matrix(yi_te, pred_te, len(GROUPS))
-    results["multiclass"] = {**mm, "baselines": mb, "confusion_matrix": cm,
-                             "classes": list(GROUPS)}
-
-    log()
-    log(f"  accuracy   {mm['accuracy']:.4f}      (majority {mb['majority_accuracy']:.4f}, "
-        f"random {mb['random_expected']:.4f})")
-    log(f"  macro F1   {mm['f1_macro']:.4f}")
-    log()
-    log("  F1 per class:")
-    for g, f1 in zip(GROUPS, mm["f1_per_class"]):
-        log(f"    {g:<22} {f1:.4f}")
-
-    log()
-    log("  confusion matrix (rows = true, columns = predicted):")
-    log(format_confusion(cm, [short_label(g) for g in GROUPS]))
-    log("    " + "   ".join(f"{short_label(g)}={g}" for g in GROUPS))
-
-    # ---- per scenario -------------------------------------------------------
-    txt_pred_te = [1 if p >= 0.5 else 0 for p in prob_txt]
-    ps = per_scenario_accuracy(scen_te, ytxt_te, txt_pred_te)
-    results["per_scenario_text_fake"] = ps
-    log()
-    log("  text_fake accuracy inside each scenario (which caption type is missed):")
-    for s, d in ps.items():
-        log(f"    {s} {GROUPS[s-1]:<22} n={d['n']:<6} acc {d['accuracy']:.4f}")
-
-    bin_pred_te = [1 if p >= 0.5 else 0 for p in prob_te]
-    results["per_scenario_binary"] = per_scenario_accuracy(scen_te, yb_te, bin_pred_te)
-
-    # text_fake is not one phenomenon. MMFakeBench builds it from AI-generated
-    # text (chatgpt_match, fever_AI, llm_*), human-written rumours
-    # (rumor_match, politicat_match, gossipcop_match) and algorithmic word
-    # edits (DGM4_text_edit_senti, coco_text_edit). Text Fluoroscopy detects
-    # machine generation, so it should separate the first group and struggle
-    # on the second - a human rumour carries no generation fingerprint.
-    # Breaking the score down by sub-category is what turns "the stream scores
-    # X" into a statement about what it actually detects.
-    sub_te = [c for c, k in zip(data["subcategory"], te.tolist()) if k]
-    by_sub: dict[str, list[int]] = {}
-    for c, t, p in zip(sub_te, ytxt_te, txt_pred_te):
-        by_sub.setdefault(c, []).append(int(t == p))
-    per_sub = {c: {"n": len(v), "accuracy": sum(v) / len(v)} for c, v in by_sub.items()}
-    results["per_subcategory_text_fake"] = per_sub
-
-    if len(per_sub) > 1:
+    pred_te = yi_te = None
+    if data["y_idx"] is None:
         log()
-        log("  text_fake accuracy by source sub-category (what it really detects):")
-        for c, d in sorted(per_sub.items(), key=lambda kv: -kv[1]["accuracy"]):
-            note = "   (few samples - do not read much into this)" if d["n"] < 20 else ""
-            log(f"    {c:<28} n={d['n']:<6} acc {d['accuracy']:.4f}{note}")
+        log("5-class: skipped, the CSV carries no label_index / group column")
+    else:
+        y_idx = data["y_idx"].to(device)
+        log(); log("-" * 68); log("5-CLASS  (the five scenarios)"); log("-" * 68)
+        head_m = train_head(x[tr], y_idx[tr], x[va], y_idx[va], len(GROUPS), args.epochs,
+                            args.lr, args.patience, args.batch_size, device, args.seed, log,
+                            weighted=not args.no_class_weight)
+        with torch.no_grad():
+            pred_te = head_m(x[te]).argmax(1).cpu().tolist()
+        yi_te = y_idx[te].cpu().tolist()
+        mm = multiclass_metrics(yi_te, pred_te, len(GROUPS))
+        mb = baselines(y_idx[tr].cpu().tolist(), yi_te, len(GROUPS), args.seed)
+        cm = confusion_matrix(yi_te, pred_te, len(GROUPS))
+        recall_per_class = [cm[i][i] / sum(cm[i]) if sum(cm[i]) else 0.0 for i in range(len(GROUPS))]
+        results["multiclass"] = {**mm, "baselines": mb, "confusion_matrix": cm,
+                                 "classes": list(GROUPS), "recall_per_class": recall_per_class,
+                                 "target": TARGETS["multiclass"],
+                                 "class_order_note": ("the project's five-scenario order; do NOT "
+                                                      "renumber - the fusion class dictionary is "
+                                                      "agreed separately")}
+        log()
+        log(f"  accuracy   {mm['accuracy']:.4f}      (majority {mb['majority_accuracy']:.4f}, "
+            f"random {mb['random_expected']:.4f})")
+        log(f"  macro F1   {mm['f1_macro']:.4f}")
+        log()
+        log("  per class:")
+        log(f"    {'class':<22} {'F1':>8} {'recall':>8}")
+        for g, f1, rc in zip(GROUPS, mm["f1_per_class"], recall_per_class):
+            log(f"    {g:<22} {f1:>8.4f} {rc:>8.4f}")
+        log()
+        log("  confusion matrix (rows = true, columns = predicted):")
+        log(format_confusion(cm, [short_label(g) for g in GROUPS]))
+        log("    " + "   ".join(f"{short_label(g)}={g}" for g in GROUPS))
+
+    # ---- per-scenario and per-source breakdowns -----------------------------
+    # text_fake is not one phenomenon. MMFakeBench builds it from AI-generated
+    # text (chatgpt_match, fever_AI, llm_*), human-written rumours (rumor_match,
+    # politicat_match, gossipcop_match) and algorithmic word edits
+    # (DGM4_text_edit_senti, coco_text_edit). Text Fluoroscopy detects machine
+    # generation, so it should separate the first group and struggle on the
+    # second - a human rumour carries no generation fingerprint. Breaking the
+    # score down by sub-category turns "the stream scores X" into a statement
+    # about what it actually detects.
+    scen = data["scenario"]
+    for key, (prob, y_te, kmask) in binary_out.items():
+        pred = [1 if p >= 0.5 else 0 for p in prob]
+        sub_k = [c for c, k in zip(data["subcategory"], kmask.tolist()) if k]
+        scen_k = [s for s, k in zip(scen, kmask.tolist()) if k] if scen else None
+
+        if scen_k:
+            ps = per_group_accuracy(scen_k, y_te, pred)
+            results[f"per_scenario_{key}"] = {str(k): v for k, v in ps.items()}
+            log()
+            log(f"  {key} accuracy inside each scenario:")
+            for sc, d in ps.items():
+                log(f"    {sc} {GROUPS[int(sc)-1]:<22} n={d['n']:<6} acc {d['accuracy']:.4f}")
+
+        if len(set(sub_k)) > 1:
+            per_sub = per_group_accuracy(sub_k, y_te, pred)
+            results[f"per_subcategory_{key}"] = per_sub
+            log()
+            log(f"  {key} accuracy by source sub-category (what it really detects):")
+            for c, d in sorted(per_sub.items(), key=lambda kv: -kv[1]["accuracy"]):
+                note = "   (few samples)" if d["n"] < 20 else ""
+                log(f"    {c:<28} n={d['n']:<6} acc {d['accuracy']:.4f}{note}")
 
     # ---- write -------------------------------------------------------------
+    id_col = data["id_column"]
+    with open(out_dir / "split_ids.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([id_col, "split"])
+        w.writerows(zip(data["ids"], data["split"]))
+
     (out_dir / "metrics.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+
+    ids_te = [i for i, k in zip(data["ids"], te.tolist()) if k]
+    cols: dict[str, list] = {id_col: ids_te,
+                             "subcategory": [c for c, k in zip(data["subcategory"], te.tolist()) if k]}
+    if scen:
+        cols["scenario"] = [s for s, k in zip(scen, te.tolist()) if k]
+    for key, (prob, y_te, _) in binary_out.items():
+        if len(y_te) != len(ids_te):        # this head scored a subset of the test split
+            continue
+        cols[key] = y_te
+        cols[f"prob_{key}"] = [f"{p:.6f}" for p in prob]
+        cols[f"pred_{key}"] = [1 if p >= 0.5 else 0 for p in prob]
+    if yi_te is not None:
+        cols["label_index"], cols["pred_index"] = yi_te, pred_te
     with open(out_dir / "predictions.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["sample_id", "scenario", "text_fake", "prob_text_fake", "pred_text_fake",
-                    "label_binary", "prob_fake", "pred_binary", "label_index", "pred_index"])
-        ids_te = [i for i, k in zip(data["ids"], te.tolist()) if k]
-        for row in zip(ids_te, scen_te, ytxt_te, prob_txt, txt_pred_te,
-                       yb_te, prob_te, bin_pred_te, yi_te, pred_te):
-            sid, s, yt, pt, qt, yb, pr, pb, yi, pi = row
-            w.writerow([sid, s, yt, f"{pt:.6f}", qt, yb, f"{pr:.6f}", pb, yi, pi])
+        w.writerow(list(cols))
+        w.writerows(zip(*cols.values()))
 
     log()
-    log("=" * 66)
-    log(f"written to {out_dir}/  (metrics.json, predictions.csv, report.txt)")
+    log("=" * 68)
+    log(f"written to {out_dir}/  (metrics.json, predictions.csv, split_ids.csv, report.txt)")
     (out_dir / "report.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
     return 0
 

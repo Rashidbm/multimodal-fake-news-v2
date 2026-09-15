@@ -10,8 +10,8 @@ through Intrinsic Features", EMNLP 2024.
     4.5  Linear(H, 768) + GELU                  -> v_textfor (B, 768)
 
 Nothing here trains, and there is no generation: one forward pass under
-no_grad.  4.5 is exported rather than applied, so the fusion stage can own
-a projection that trains; extract_textfor.py caches the (B, H) vectors.
+no_grad.  4.5 is exported rather than applied, so the fusion stage can own a
+projection that trains; extract_textfor.py caches the (B, H) vectors.
 
 The layer choice and the two departures from the guidelines are argued in
 docs/TEXT_FLUOROSCOPY.md.
@@ -28,9 +28,8 @@ import torch.nn as nn
 class TextFluoroscopyConfig:
     model_name: str = "Qwen/Qwen3.5-9B"
     layer: int = 30               # see "which layer" in docs/TEXT_FLUOROSCOPY.md
-    max_len: int = 512            # tokens per caption
+    max_len: int = 96             # longest caption measured on this dataset: 45 tokens
     proj_dim: int = 768           # must match v_semantic / v_imgfor
-    truncate_layers: bool = False  # off by default; see the note in __init__
     dtype: str = "auto"           # auto | bfloat16 | float16 | float32
     pretrained: bool = True       # False = tiny random Qwen2, used by the unit tests
 
@@ -41,7 +40,13 @@ class TextFluoroscopyConfig:
 
 def resolve_layer(num_hidden_states: int, requested: int) -> int:
     """Validate a layer index: hidden_states has num_layers + 1 entries,
-    index 0 being the embedding output."""
+    index 0 being the embedding output.
+
+    The guidelines say "layer 30". That exists on a 32-layer model (Qwen3.5-9B,
+    and the paper's gte-Qwen1.5-7B) and does not on a 28-layer one (Qwen2-7B).
+    Checked here rather than assumed, so a wrong index fails in the first
+    second instead of an hour into a run.
+    """
     num_layers = num_hidden_states - 1
     idx = requested if requested >= 0 else num_hidden_states + requested
     if not 0 <= idx < num_hidden_states:
@@ -73,9 +78,7 @@ def masked_mean_pool(hidden_states: torch.Tensor, attention_mask: torch.Tensor) 
             f"hidden_states {tuple(hidden_states.shape[:2])}"
         )
     mask = attention_mask.unsqueeze(-1).to(hidden_states.dtype)   # (B, S, 1)
-    summed = (hidden_states * mask).sum(dim=1)                    # (B, H)
-    counts = mask.sum(dim=1).clamp(min=1e-9)                      # (B, 1)
-    return summed / counts
+    return (hidden_states * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +90,8 @@ class TextForensicProjection(nn.Module):
 
     Stage 4's cross-attention needs v_semantic, v_imgfor and v_textfor to
     share one embedding size; CLIP and UnivFD emit 768, Qwen3.5-9B emits 4096.
-    No transformers import here, so the fusion module can depend on it
-    without pulling in an LLM.
+    No transformers import here, so the fusion module can depend on it without
+    pulling in an LLM.
     """
 
     def __init__(self, in_dim: int = 4096, out_dim: int = 768):
@@ -111,28 +114,50 @@ class TextForensicProjection(nn.Module):
             raise ValueError(f"expected last dim {self.in_dim}, got {x.size(-1)}")
         return self.act(self.fc(x))
 
-    def extra_repr(self) -> str:
-        return f"in_dim={self.in_dim}, out_dim={self.out_dim}"
-
 
 # ---------------------------------------------------------------------------
 # the extractor
 # ---------------------------------------------------------------------------
 
 def resolve_dtype(name: str, device: torch.device) -> torch.dtype:
-    if name == "float32":
-        return torch.float32
-    if name == "float16":
-        return torch.float16
-    if name == "bfloat16":
-        return torch.bfloat16
+    if name in ("float32", "float16", "bfloat16"):
+        return getattr(torch, name)
     if name != "auto":
         raise ValueError(f"unknown dtype {name!r}")
     if device.type != "cuda":
-        return torch.float32              # CPU: fp16 is unsupported for many ops
-    if torch.cuda.is_bf16_supported():
-        return torch.bfloat16             # RTX 4090, A100
-    return torch.float16                  # T4, P100
+        return torch.float32                  # CPU: fp16 is unsupported for many ops
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+
+def config_int(cfg, *names):
+    """Find an integer field on a config, including nested sub-configs.
+
+    Not every architecture puts hidden_size and num_hidden_layers at the top
+    level. Qwen3.5 is heterogeneous - a mix of Gated DeltaNet and Gated
+    Attention blocks - and nests them, so `config.hidden_size` raises
+    AttributeError. Returns None rather than guessing.
+    """
+    for n in names:
+        v = getattr(cfg, n, None)
+        if isinstance(v, int):
+            return v
+    subs = []
+    getter = getattr(cfg, "get_text_config", None)
+    if callable(getter):
+        try:
+            subs.append(getter())
+        except Exception:
+            pass
+    for attr in ("text_config", "llm_config", "language_model", "decoder"):
+        sub = getattr(cfg, attr, None)
+        if sub is not None:
+            subs.append(sub)
+    for sub in subs:
+        for n in names:
+            v = getattr(sub, n, None)
+            if isinstance(v, int):
+                return v
+    return None
 
 
 class TextFluoroscopy(nn.Module):
@@ -148,7 +173,7 @@ class TextFluoroscopy(nn.Module):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dtype = resolve_dtype(cfg.dtype, self.device)
 
-        from transformers import AutoTokenizer, AutoModel
+        from transformers import AutoModel, AutoTokenizer
 
         if cfg.pretrained:
             self.tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
@@ -174,68 +199,60 @@ class TextFluoroscopy(nn.Module):
         for p in self.model.parameters():
             p.requires_grad = False       # frozen: feature extraction only
 
-        self.hidden_size = self.model.config.hidden_size
-        self.num_layers = self.model.config.num_hidden_layers
-
+        # Measure the dimensions from a real forward pass rather than trusting
+        # the config to expose them. One short pass, and it is correct for any
+        # architecture including nested and heterogeneous ones.
+        self.num_layers, self.hidden_size = self.measure_shape()
         self.layer = resolve_layer(self.num_layers + 1, cfg.layer)
 
-        # Dropping the layers above the one we read saves compute and VRAM;
-        # the setting must match between cached extraction and live inference.
-        #
-        # Trap: transformers builds hidden_states as
-        # [embeddings, out_1, ..., out_{N-1}, norm(out_N)] - every entry is the
-        # raw block output EXCEPT the last, which has the final RMSNorm applied.
-        # Cutting the stack would make the layer we read the new last one and
-        # silently norm it.  Identity keeps both paths equal; see
-        # test_layer_truncation_keeps_the_same_vector.
-        # Off by default. At layer 30 of 32 it saves about 6% of the forward
-        # pass, which does not buy much against the risk: the equality of the
-        # two paths is verified (test_layer_truncation_keeps_the_same_vector)
-        # only for a standard decoder stack, and Qwen3.5 is a hybrid of Gated
-        # DeltaNet and Gated Attention blocks with sparse MoE. Enable it only
-        # after checking that a truncated run reproduces an untruncated one on
-        # the model actually in use.
-        self._truncated = False
-        if cfg.truncate_layers and 0 < self.layer < self.num_layers:
-            if not (hasattr(self.model, "layers") and hasattr(self.model, "norm")):
-                raise RuntimeError(
-                    f"truncate_layers=True but {cfg.model_name} does not expose "
-                    "model.layers / model.norm; run with truncation off"
-                )
-            self.model.layers = self.model.layers[: self.layer]
-            self.model.norm = nn.Identity()
-            self._truncated = True
+        # Cross-check against the config where it does expose them, so a
+        # mismatch is visible rather than silent.
+        cfg_h = config_int(self.model.config, "hidden_size", "d_model", "n_embd")
+        cfg_l = config_int(self.model.config, "num_hidden_layers", "n_layer", "num_layers")
+        self.config_agrees = (cfg_h in (None, self.hidden_size)
+                              and cfg_l in (None, self.num_layers))
 
-    @property
-    def read_index(self) -> int:
-        """Index into outputs.hidden_states after any truncation."""
-        return -1 if self._truncated else self.layer
+    @torch.no_grad()
+    def measure_shape(self) -> tuple[int, int]:
+        """(num_layers, hidden_size), read off an actual forward pass."""
+        if self.tokenizer is not None:
+            enc = self.tokenizer("probe", return_tensors="pt")
+            enc = {k: v.to(self.device) for k, v in enc.items()}
+        else:
+            enc = {"input_ids": torch.tensor([[1, 2]], device=self.device)}
+        hs = self.model(**enc, output_hidden_states=True).hidden_states
+        if not hs:
+            raise RuntimeError(f"{self.cfg.model_name} returned no hidden_states")
+        return len(hs) - 1, int(hs[-1].shape[-1])
 
     def projection(self) -> TextForensicProjection:
         return TextForensicProjection(self.hidden_size, self.cfg.proj_dim)
-
-    def tokenize(self, texts: list[str]) -> dict:
-        if self.tokenizer is None:
-            raise RuntimeError("no tokenizer: this instance was built with pretrained=False")
-        enc = self.tokenizer(texts, padding=True, truncation=True,
-                             max_length=self.cfg.max_len, return_tensors="pt")
-        return {k: v.to(self.device) for k, v in enc.items()}
 
     @torch.no_grad()
     def encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """One forward pass -> pooled (B, hidden_size)."""
         out = self.model(input_ids=input_ids, attention_mask=attention_mask,
                          output_hidden_states=True)
-        hidden = out.hidden_states[self.read_index]          # (B, S, H)
-        return masked_mean_pool(hidden, attention_mask)      # (B, H)
+        return masked_mean_pool(out.hidden_states[self.layer], attention_mask)
 
     @torch.no_grad()
-    def encode_texts(self, texts: list[str]) -> torch.Tensor:
-        enc = self.tokenize(texts)
-        return self.encode(enc["input_ids"], enc["attention_mask"])
+    def encode_texts(self, texts: list[str]) -> tuple[torch.Tensor, list[int]]:
+        """Tokenize and encode -> (pooled (B, H), untruncated token lengths).
+
+        The lengths are returned so the caller can record which captions were
+        truncated, which the guidelines ask for explicitly.
+        """
+        if self.tokenizer is None:
+            raise RuntimeError("no tokenizer: this instance was built with pretrained=False")
+        lengths = [len(x) for x in self.tokenizer(texts, padding=False,
+                                                  truncation=False)["input_ids"]]
+        enc = self.tokenizer(texts, padding=True, truncation=True,
+                             max_length=self.cfg.max_len, return_tensors="pt")
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+        return self.encode(enc["input_ids"], enc["attention_mask"]), lengths
 
     def describe(self) -> str:
-        kept = f"{self.layer}/{self.num_layers} layers kept" if self._truncated else "all layers kept"
+        note = "" if self.config_agrees else "  [config reports different dims - measured wins]"
         return (f"{self.cfg.model_name} | hidden={self.hidden_size} layers={self.num_layers} "
-                f"| reading hidden_states[{self.layer}] ({kept}) | dtype={self.dtype} "
-                f"| device={self.device}")
+                f"| reading hidden_states[{self.layer}] | dtype={self.dtype} "
+                f"| device={self.device}{note}")

@@ -52,3 +52,11 @@ cat features/v_textfor.json
 echo "===== probe (scores for this stream alone) ====="
 $PY -m fnd.probe_textfor --features features/v_textfor.pt --csv "$CSV" \
     --out outputs/textfor_probe
+
+# The domain-matched control (same topic, different authorship) reuses the
+# cached vectors, so it costs minutes rather than another extraction:
+#   python scripts/enrich_provenance.py --csv "$CSV" --raw data/raw/MMFakeBench \
+#       --out data/processed/enriched.csv
+#   $PY -m fnd.probe_textfor --features features/v_textfor.pt \
+#       --csv data/processed/enriched.csv --where domain=gossip \
+#       --out outputs/textfor_probe_gossip
