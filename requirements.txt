@@ -1,5 +1,8 @@
+numpy>=1.24
 pillow>=10
 pytest>=8
 torch>=2.2
 torchvision>=0.17
+# Qwen3.5 support landed recently: install the newest transformers available.
+# fnd_clip.py already handles both the <5 and >=5 CLIP output shapes.
 transformers>=4.40

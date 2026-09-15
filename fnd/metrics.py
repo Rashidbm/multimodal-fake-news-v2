@@ -59,9 +59,42 @@ def multiclass_metrics(y_true: list[int], y_pred: list[int], num_classes: int) -
     return {"n": n, "accuracy": acc, "f1_macro": sum(f1s) / num_classes, "f1_per_class": f1s}
 
 
+def confusion_matrix(y_true: list[int], y_pred: list[int], num_classes: int) -> list[list[int]]:
+    """m[t][p] = how many samples of true class t were predicted as p."""
+    m = [[0] * num_classes for _ in range(num_classes)]
+    for t, p in zip(y_true, y_pred):
+        m[int(t)][int(p)] += 1
+    return m
+
+
+def format_confusion(m: list[list[int]], labels: list[str] | None = None) -> str:
+    """Render a confusion matrix as a text table (rows = true, cols = predicted)."""
+    n = len(m)
+    labels = labels or [str(i) for i in range(n)]
+    w = max(max(len(l) for l in labels), max((len(str(v)) for row in m for v in row), default=1), 5)
+    head = " " * (w + 2) + " ".join(f"{l[:w]:>{w}}" for l in labels)
+    lines = [head, " " * (w + 2) + " ".join("-" * w for _ in labels)]
+    for i, row in enumerate(m):
+        lines.append(f"{labels[i][:w]:>{w}} | " + " ".join(f"{v:>{w}}" for v in row))
+    return "\n".join(lines)
+
+
 def per_scenario_accuracy(scenarios: list[int], y_true: list[int], y_pred: list[int]) -> dict:
     hit, tot = defaultdict(int), defaultdict(int)
     for s, t, p in zip(scenarios, y_true, y_pred):
         tot[s] += 1
         hit[s] += int(t == p)
     return {int(s): {"n": tot[s], "accuracy": hit[s] / tot[s]} for s in sorted(tot)}
+
+
+def per_group_accuracy(keys: list, y_true: list[int], y_pred: list[int]) -> dict:
+    """Accuracy inside each group, for any key type (scenario, sub-category).
+
+    Same idea as per_scenario_accuracy but keeps the key as given, so a
+    breakdown by source folder or domain does not have to be an integer.
+    """
+    hit, tot = defaultdict(int), defaultdict(int)
+    for k, t, p in zip(keys, y_true, y_pred):
+        tot[k] += 1
+        hit[k] += int(t == p)
+    return {k: {"n": tot[k], "accuracy": hit[k] / tot[k]} for k in sorted(tot, key=str)}
