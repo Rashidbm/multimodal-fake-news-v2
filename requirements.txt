@@ -4,5 +4,7 @@ pytest>=8
 torch>=2.2
 torchvision>=0.17
 # Qwen3.5 support landed recently: install the newest transformers available.
-# fnd_clip.py already handles both the <5 and >=5 CLIP output shapes.
+# fnd_clip.py already handles both the <5 and >=5 CLIP output shapes, and the
+# match/mismatch branch's qwenvl backbone needs Qwen2.5-VL (transformers 4.49+);
+# --backbone clip and every test run without it.
 transformers>=4.40
