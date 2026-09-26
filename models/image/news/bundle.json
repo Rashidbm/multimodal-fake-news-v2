@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "encoders": {
+    "clip": {
+      "kind": "clip",
+      "model_revision": "32bd64288804d66eefd0ccbe215aa642df71cc41",
+      "model_name": "openai/clip-vit-large-patch14"
+    },
+    "rgb_robust": {
+      "kind": "rgb",
+      "checkpoint": "rgb_robust.pt",
+      "checkpoint_sha256": "30e54db331e13d2dc36a7d273a13e62b92a70e291f60e2f6d098f05e67408def"
+    },
+    "dct_guide": {
+      "kind": "dct",
+      "checkpoint": "dct_guide.pt",
+      "dct_stats": {
+        "mean": 0.2934411623666762,
+        "std": 2.8091730761343365,
+        "fit_split": "train",
+        "training_pixels": 1605632000,
+        "csv_sha256": "902e40710c84a9e246d1075bf08852d29f8eb0eed67e867fb9cc522ede328a97",
+        "definition": "RGB bilinear224 -> Y [0,255] -> orthonormal type-II block DCT 8/16 -> log(abs+1e-8) -> spatial reassembly -> mean -> global scalar zscore",
+        "source_sha256": "a1594aa2613ece1650a47077c813a57631cc3683f3a62d48ab924a1a59050bdc"
+      },
+      "checkpoint_sha256": "23e3ba5354ea147532e6fe6c128d29d3e0f3b73639c6e7d3b1f36d11a373c7b3"
+    }
+  },
+  "head": "head.pt",
+  "head_sha256": "a8d4bdcefeac370887e465258c19a5dbb72f446ececdb335e668610bfdf4c3ba",
+  "threshold": 0.4267422370663268,
+  "target": "0 authentic image; 1 edited/manipulated or AI-generated image",
+  "feature_dimension": 768,
+  "raw_feature_dimension": 4864,
+  "projection": "Classifier direction plus 767 training-only residual PCA components",
+  "projection_fit_rows": 17620,
+  "max_projection_logit_error": 4.8009832100959215e-05,
+  "max_float32_scaling_logit_error": 2.313644680285165e-07,
+  "source_classifier_sha256": "cd935c7697138839330cff150f94df1213a8e377ed143ba1691bed2c9f9e8daa",
+  "selection_sha256": "7a225b77e575d66bbe7e39ee455816675259706d4278b7cccd0536cbb75cba3c",
+  "source_cache_sha256": "fc7d267b28d7b6db738609e7a698a508e68cbe80ff94bb08a88459713d93c678",
+  "input": "Image pixels only; no text, labels, filenames or metadata enter encoders",
+  "training_target": "0 dataset-labeled authentic image, 1 manipulated or AI-generated image",
+  "integration_note": "No fusion with the project text or semantic branch has been trained or evaluated by this export"
+}

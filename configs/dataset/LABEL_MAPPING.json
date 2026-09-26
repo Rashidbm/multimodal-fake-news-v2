@@ -1,0 +1,58 @@
+{
+  "scenarios": [
+    {
+      "scenario": 1,
+      "scenario_index": 0,
+      "name": "ooc",
+      "text_fake": 0,
+      "image_fake": 0,
+      "news_fake": 1,
+      "alignment_target": 1
+    },
+    {
+      "scenario": 2,
+      "scenario_index": 1,
+      "name": "fake_text_real_image",
+      "text_fake": 1,
+      "image_fake": 0,
+      "news_fake": 1,
+      "alignment_target": null
+    },
+    {
+      "scenario": 3,
+      "scenario_index": 2,
+      "name": "real_text_fake_image",
+      "text_fake": 0,
+      "image_fake": 1,
+      "news_fake": 1,
+      "alignment_target": null
+    },
+    {
+      "scenario": 4,
+      "scenario_index": 3,
+      "name": "genuine",
+      "text_fake": 0,
+      "image_fake": 0,
+      "news_fake": 0,
+      "alignment_target": 0
+    },
+    {
+      "scenario": 5,
+      "scenario_index": 4,
+      "name": "fake_text_fake_image",
+      "text_fake": 1,
+      "image_fake": 1,
+      "news_fake": 1,
+      "alignment_target": null
+    }
+  ],
+  "ai_authorship": "Not annotated: text_fake is NOT an AI-authorship label; image_fake includes editing and generation.",
+  "v3_index_translation_only": {
+    "4": 0,
+    "1": 1,
+    "3": 2,
+    "2": 3,
+    "5": 4
+  },
+  "v3_semantic_caveat": "V3 names its text category AI-Text. This dataset also contains rumors and edited text; index conversion does not establish AI authorship."
+}

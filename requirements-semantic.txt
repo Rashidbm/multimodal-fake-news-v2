@@ -1,0 +1,12 @@
+# Versions used to verify the saved semantic model. Python 3.13.11 was tested.
+# Install the appropriate CUDA build of torch/torchvision first on NVIDIA PCs.
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.2.0
+numpy==2.4.2
+scipy==1.17.0
+scikit-learn==1.8.0
+joblib==1.5.3
+Pillow==12.1.0
+threadpoolctl==3.6.0
+pytest==9.0.2

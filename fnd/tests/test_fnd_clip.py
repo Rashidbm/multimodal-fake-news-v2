@@ -39,6 +39,9 @@ def test_forward_shapes_and_attention(model):
     assert torch.allclose(out["attention"].sum(-1), torch.ones(2), atol=1e-5)
     assert out["clip_similarity"].shape == (2,)               # 2.3 cosine similarity
     assert (out["clip_similarity"].abs() <= 1.0 + 1e-5).all()
+    assert out["semantic"].shape == (2, 3 * model.cfg.proj_dim)
+    pooled = out["semantic"].reshape(2, 3, model.cfg.proj_dim).sum(1)
+    assert torch.allclose(model.classifier(pooled), out["logits"], atol=1e-6)
 
 
 def test_stream_dimensions(model):
@@ -68,6 +71,22 @@ def test_five_output_variant():
     torch.manual_seed(0)
     m = FNDCLIP(FNDCLIPConfig(pretrained=False, proj_dim=32, num_outputs=5)).eval()
     assert m(**fake_batch(1))["logits"].shape == (1, 5)
+
+
+def test_author_inspired_streams_keep_binary_and_semantic_interfaces():
+    torch.manual_seed(9)
+    m = FNDCLIP(FNDCLIPConfig(pretrained=False, augment_unimodal_clip=True,
+                             fine_tune_bert=False, normalize_streams=True)).eval()
+    assert m.text_proj[0].in_features == 768 + 512
+    assert m.image_proj[0].in_features == 2048 + 512
+    assert all(not p.requires_grad for p in m.bert.parameters())
+    assert any(p.requires_grad for p in m.resnet.parameters())
+    with torch.no_grad():
+        result = m(**fake_batch(1))
+    assert result['logits'].shape == (1, 1)
+    assert result['semantic'].shape == (1, 768)
+    pooled = result['semantic'].reshape(1, 3, 256).sum(1)
+    assert torch.allclose(m.classifier(pooled), result['logits'], atol=1e-6)
 
 
 def test_metrics():

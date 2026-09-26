@@ -25,6 +25,20 @@ IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 CLIP_MEAN, CLIP_STD = (0.4815, 0.4578, 0.4082), (0.2686, 0.2613, 0.2758)
 
 
+def clip_image_transform(mode='legacy'):
+    """Retain old checkpoint behavior; official mode matches OpenAI CLIP's transform."""
+    if mode == 'legacy':
+        return transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(),
+                                   transforms.Normalize(CLIP_MEAN, CLIP_STD)])
+    if mode == 'official':
+        return transforms.Compose([
+            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.CenterCrop(224), transforms.ToTensor(),
+            transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                 (0.26862954, 0.26130258, 0.27577711))])
+    raise ValueError(f'Unknown CLIP preprocessing: {mode}')
+
+
 def read_split(csv_path: str | Path, split: str) -> list[dict]:
     with open(csv_path, newline="", encoding="utf-8") as f:
         rows = [r for r in csv.DictReader(f) if r["split"] == split]
@@ -36,7 +50,7 @@ def read_split(csv_path: str | Path, split: str) -> list[dict]:
 class FakeNewsDataset(Dataset):
     def __init__(self, csv_path: str | Path, split: str, bert_tokenizer, clip_tokenizer,
                  max_len_bert: int = 64, max_len_clip: int = 77, train: bool = False,
-                 image_root: str | Path | None = None):
+                 image_root: str | Path | None = None, clip_preprocess: str = 'legacy'):
         self.rows = read_split(csv_path, split)
         self.bert_tok, self.clip_tok = bert_tokenizer, clip_tokenizer
         self.max_len_bert, self.max_len_clip = max_len_bert, max_len_clip
@@ -44,8 +58,7 @@ class FakeNewsDataset(Dataset):
         aug = [transforms.RandomHorizontalFlip()] if train else []
         self.resnet_tf = transforms.Compose([transforms.Resize((224, 224)), *aug, transforms.ToTensor(),
                                              transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
-        self.clip_tf = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor(),
-                                           transforms.Normalize(CLIP_MEAN, CLIP_STD)])
+        self.clip_tf = clip_image_transform(clip_preprocess)
 
     def __len__(self) -> int:
         return len(self.rows)

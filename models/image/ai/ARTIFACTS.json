@@ -1,0 +1,16 @@
+{
+  "weights_in_git": false,
+  "files": [
+    {
+      "filename": "head.pt",
+      "size_bytes": 6313521,
+      "sha256": "56ee418fa03bb282019351b576faacc04666673bf8d099e8dd489e3f0edaee8a"
+    },
+    {
+      "filename": "rgb_robust.pt",
+      "size_bytes": 94342189,
+      "sha256": "30e54db331e13d2dc36a7d273a13e62b92a70e291f60e2f6d098f05e67408def"
+    }
+  ],
+  "source_directory": "MultiGuard_Windows_demo/outputs/image_branch_2026_09_14/selected_ai"
+}

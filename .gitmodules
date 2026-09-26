@@ -1,0 +1,3 @@
+[submodule "external/FakeImageDetection"]
+	path = external/FakeImageDetection
+	url = https://github.com/chandlerbing65nm/FakeImageDetection.git

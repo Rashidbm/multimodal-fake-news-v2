@@ -25,6 +25,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .alignment import StandardizedSimilarityGate, PairInteractionHead
+
 
 @dataclass
 class FNDCLIPConfig:
@@ -34,9 +36,14 @@ class FNDCLIPConfig:
     dropout: float = 0.1
     num_outputs: int = 1           # 1 = binary real/fake (spec); 5 = one logit per scenario
     fine_tune_resnet: bool = True  # spec 2.1: ResNet-50 is fine-tuned
-    fine_tune_bert: bool = True    # BERT is trained too (paper); set False to freeze
-    similarity_weighting: str = "relu"   # 'relu' | 'sigmoid' | 'none'  (see _weight_from_sim)
+    fine_tune_bert: bool = True    # existing project baseline; the cited preprint freezes BERT
+    similarity_weighting: str = "relu"   # 'relu' | 'sigmoid' | 'none' | 'standardized'
+    alignment_head: bool = False
+    normalize_streams: bool = False
+    fine_tune_matching: bool = True
     pretrained: bool = True        # False = random weights, used only by unit tests (no downloads)
+    clip_preprocess: str = 'legacy'  # checkpointed; old models retain their original inputs
+    augment_unimodal_clip: bool = False  # separate author-inspired fusion experiment
 
 
 class FNDCLIP(nn.Module):
@@ -73,8 +80,9 @@ class FNDCLIP(nn.Module):
         # ---- projections to the common size D ------------------------------
         def proj(in_dim):
             return nn.Sequential(nn.Linear(in_dim, D), nn.ReLU(), nn.Dropout(cfg.dropout))
-        self.text_proj = proj(self.bert.config.hidden_size)   # 768  -> D
-        self.image_proj = proj(2048)                           # 2048 -> D
+        extra_clip = clip_dim if cfg.augment_unimodal_clip else 0
+        self.text_proj = proj(self.bert.config.hidden_size + extra_clip)
+        self.image_proj = proj(2048 + extra_clip)
         self.fused_proj = proj(2 * clip_dim)                   # 1024 -> D
 
         # ---- 2.4 modality-wise attention + classifier ----------------------
@@ -82,6 +90,14 @@ class FNDCLIP(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(D, D // 2), nn.ReLU(), nn.Dropout(cfg.dropout), nn.Linear(D // 2, cfg.num_outputs)
         )
+        if cfg.similarity_weighting == 'standardized':
+            self.similarity_gate = StandardizedSimilarityGate()
+        if cfg.normalize_streams:
+            self.stream_norms = nn.ModuleList([nn.LayerNorm(D) for _ in range(3)])
+        if cfg.alignment_head:
+            self.matching_head = PairInteractionHead(clip_dim)
+            self.matching_projection = nn.Linear(128, D)
+            self.matching_head.requires_grad_(cfg.fine_tune_matching)
 
     # 2.3: turn the cosine similarity into a weight for the fused CLIP vector.
     # Poorly aligned pairs (low similarity) should contribute less.
@@ -93,6 +109,8 @@ class FNDCLIP(nn.Module):
             return torch.sigmoid(sim * 10.0)   # smooth 0..1, centred at sim = 0
         if mode == "none":
             return torch.ones_like(sim)
+        if mode == "standardized":
+            return self.similarity_gate(sim)
         raise ValueError(f"unknown similarity_weighting {mode!r}")
 
     def _clip_embed(self, out) -> torch.Tensor:
@@ -116,27 +134,66 @@ class FNDCLIP(nn.Module):
             c_img = self._clip_embed(self.clip.get_image_features(pixel_values=clip_pixels))      # (B, 512)
             c_txt = self._clip_embed(self.clip.get_text_features(input_ids=clip_input_ids,
                                                                  attention_mask=clip_attention_mask))  # (B, 512)
+        raw_clip_image, raw_clip_text = c_img, c_txt
         c_img = F.normalize(c_img, dim=-1)
         c_txt = F.normalize(c_txt, dim=-1)
         sim = (c_img * c_txt).sum(dim=-1)                                         # cosine (B,)
         weight = self._weight_from_sim(sim).unsqueeze(-1)                         # (B, 1)
-        fused = torch.cat([c_img, c_txt], dim=-1) * weight                        # (B, 1024)
+        fused = torch.cat([c_img, c_txt], dim=-1)                                # (B, 1024)
+        projected_clip = self.fused_proj(fused if self.cfg.similarity_weighting == 'standardized' else fused * weight)
+        if self.cfg.augment_unimodal_clip:
+            txt = torch.cat([txt, raw_clip_text], dim=-1)
+            img = torch.cat([img, raw_clip_image], dim=-1)
+        projected_text, projected_image = self.text_proj(txt), self.image_proj(img)
+        if self.cfg.normalize_streams:
+            projected_text = self.stream_norms[0](projected_text)
+            projected_image = self.stream_norms[1](projected_image)
+            projected_clip = self.stream_norms[2](projected_clip)
+        if self.cfg.similarity_weighting == 'standardized':
+            projected_clip = projected_clip * weight
+        extra = {}
+        if self.cfg.alignment_head:
+            matching_features, matching_logits = self.matching_head(c_img, c_txt)
+            # Put the trained pair interaction into the third stream, preserving
+            # the 3*D semantic export and its exact relationship to V1 logits.
+            projected_clip = projected_clip + self.matching_projection(matching_features)
+            extra['match_logits'] = matching_logits
 
         # project the three streams to D
-        streams = torch.stack([self.text_proj(txt), self.image_proj(img), self.fused_proj(fused)], dim=1)  # (B, 3, D)
+        streams = torch.stack([projected_text, projected_image, projected_clip], dim=1)  # (B, 3, D)
 
         # 2.4 modality-wise attention: one score per stream, softmax, weighted sum
         scores = self.attention(streams).squeeze(-1)                              # (B, 3)
         alpha = torch.softmax(scores, dim=-1)                                     # (B, 3)
-        pooled = (alpha.unsqueeze(-1) * streams).sum(dim=1)                       # (B, D)
+        weighted_streams = alpha.unsqueeze(-1) * streams
+        pooled = weighted_streams.sum(dim=1)                                     # (B, D)
         logits = self.classifier(pooled)                                          # (B, num_outputs)
-        return {"logits": logits, "attention": alpha, "clip_similarity": sim}
+        # V2 consumes the three trained modality representations before the sum.
+        # Default D=256 gives 3*256=768 features, with no new/random projection.
+        return {"logits": logits, "attention": alpha, "clip_similarity": sim,
+                "semantic": weighted_streams.flatten(1), **extra}
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.clip.eval()
+        if not self.cfg.fine_tune_bert:
+            self.bert.eval()
+        if not self.cfg.fine_tune_resnet:
+            self.resnet.eval()
+        if self.cfg.alignment_head and not self.cfg.fine_tune_matching:
+            self.matching_head.eval()
+        return self
 
     def parameter_groups(self, lr_backbone: float, lr_head: float, weight_decay: float):
         """Backbones (ResNet, BERT) get a small learning rate, new layers a larger one."""
         backbone = [p for m in (self.resnet, self.bert) for p in m.parameters() if p.requires_grad]
         head = [p for m in (self.text_proj, self.image_proj, self.fused_proj, self.attention, self.classifier)
                 for p in m.parameters()]
+        if self.cfg.normalize_streams:
+            head.extend(self.stream_norms.parameters())
+        if self.cfg.alignment_head:
+            head.extend(p for p in self.matching_head.parameters() if p.requires_grad)
+            head.extend(self.matching_projection.parameters())
         groups = [{"params": head, "lr": lr_head, "weight_decay": weight_decay}]
         if backbone:
             groups.append({"params": backbone, "lr": lr_backbone, "weight_decay": weight_decay})

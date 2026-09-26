@@ -1,4 +1,15 @@
 __pycache__/
+*.egg-info/
+.DS_Store
+.venv/
+artifacts/
+outputs/
+exports/
+runtime_cache/
+models/semantic/*.pt
+models/semantic/*.joblib
+models/semantic/*.npz
+models/image/**/*.pt
 *.pyc
 .pytest_cache/
 data/raw/

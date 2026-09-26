@@ -3,7 +3,7 @@
     python -m fnd.train --csv data/processed/balanced_5group.csv --out outputs/fnd_clip_v1
 
 What happens:
-  1. train split -> optimise; val split -> pick the best epoch (binary F1)
+  1. train split -> optimise; val split -> pick the best epoch (binary macro F1)
   2. the best checkpoint is evaluated once on the test split
   3. outputs/<run>/  best.pt, history.json, test_metrics.json, test_predictions.csv
 
@@ -28,6 +28,8 @@ import csv
 import json
 import random
 import time
+import hashlib
+import platform
 from pathlib import Path
 
 import torch
@@ -37,6 +39,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from .data.torch_dataset import FakeNewsDataset, collate
 from .metrics import binary_metrics, multiclass_metrics, per_scenario_accuracy
 from .models.fnd_clip import FNDCLIP, FNDCLIPConfig
+from .models.alignment import matching_loss
 
 
 def pick_device(name: str) -> torch.device:
@@ -60,7 +63,7 @@ def to_device(batch: dict, device: torch.device) -> dict:
     return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
 
 
-def run_epoch(model, loader, device, task, optimizer=None, log_every=50) -> dict:
+def run_epoch(model, loader, device, task, optimizer=None, log_every=50, alignment_loss_weight=0.3) -> dict:
     """One pass over ``loader``.  With an optimizer -> training, else evaluation.
     Returns metrics and, for evaluation, the per-sample predictions."""
     training = optimizer is not None
@@ -78,6 +81,8 @@ def run_epoch(model, loader, device, task, optimizer=None, log_every=50) -> dict
                 loss = F.binary_cross_entropy_with_logits(logits.squeeze(-1), batch["label_binary"])
             else:
                 loss = F.cross_entropy(logits, batch["label_index"])
+            if training and 'match_logits' in out and out['match_logits'].requires_grad:
+                loss = loss + alignment_loss_weight * matching_loss(out['match_logits'], batch['scenario'])
         if training:
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -133,7 +138,8 @@ def run_epoch(model, loader, device, task, optimizer=None, log_every=50) -> dict
 def summary(m: dict, task: str) -> str:
     if task == "binary":
         head = (f"loss {m['loss']:.4f}  acc {m['accuracy']:.4f}  f1 {m['f1']:.4f}  "
-                f"auc {m['auc']:.4f}  prec {m['precision']:.4f}  rec {m['recall']:.4f}")
+                f"auc {m['auc']:.4f}  prec {m['precision']:.4f}  rec {m['recall']:.4f}  "
+                f"real_rec {m['real_recall']:.4f}  bal_acc {m['balanced_accuracy']:.4f}  macro_f1 {m['f1_macro']:.4f}")
     else:
         head = f"loss {m['loss']:.4f}  acc {m['accuracy']:.4f}  f1_macro {m['f1_macro']:.4f}"
     per = "  ".join(f"s{s}={v['accuracy']:.3f}" for s, v in m["per_scenario"].items())
@@ -164,25 +170,58 @@ def main(argv=None) -> int:
                     help="do not oversample genuine pairs to balance real/fake in training")
     ap.add_argument("--freeze-bert", action="store_true")
     ap.add_argument("--freeze-resnet", action="store_true")
+    ap.add_argument("--selection-metric", choices=["f1", "f1_macro", "balanced_accuracy"], default="f1_macro",
+                    help="validation checkpoint criterion; f1 is fake-class F1 (legacy default)")
+    ap.add_argument("--save-all-checkpoints", action="store_true")
+    ap.add_argument("--skip-test", action="store_true", help="reserve test evaluation for a separate evaluation command")
+    ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--similarity-weighting", choices=['relu', 'sigmoid', 'none', 'standardized'], default='relu')
+    ap.add_argument('--clip-preprocess', choices=['legacy', 'official'], default='legacy')
+    ap.add_argument('--augment-unimodal-clip', action='store_true')
+    ap.add_argument('--alignment-head', action='store_true')
+    ap.add_argument('--normalize-streams', action='store_true')
+    ap.add_argument('--alignment-loss-weight', type=float, default=0.3)
+    ap.add_argument('--matching-checkpoint')
+    ap.add_argument('--freeze-matching', action='store_true')
+    ap.add_argument("--samples-per-epoch", type=int, default=None,
+                    help="fixed number of weighted training draws for data-expansion comparisons")
     ap.add_argument("--image-root", default=None, help="prefix for relative image paths in the CSV")
     ap.add_argument("--limit", type=int, default=None, help="debug: use only this many rows per split")
     ap.add_argument("--random-init", action="store_true", help="smoke test only: no pretrained weights")
     args = ap.parse_args(argv)
+    if (args.matching_checkpoint or args.freeze_matching) and not args.alignment_head:
+        ap.error('--matching-checkpoint/--freeze-matching require --alignment-head')
 
     set_seed(args.seed)
     device = pick_device(args.device)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if (out_dir / "best.pt").exists() or (out_dir / "history.json").exists():
+        raise FileExistsError(f"refusing to overwrite an existing run: {out_dir}")
+    import transformers, torchvision
+    with open(out_dir / "run_manifest.json", "w") as f:
+        json.dump({"args": vars(args), "csv_sha256": hashlib.sha256(Path(args.csv).read_bytes()).hexdigest(),
+                   "python": platform.python_version(), "torch": torch.__version__,
+                   "torchvision": torchvision.__version__, "transformers": transformers.__version__}, f, indent=2)
     print(f"device: {device}   task: {args.task}   out: {out_dir}")
 
     cfg = FNDCLIPConfig(num_outputs=1 if args.task == "binary" else 5, pretrained=not args.random_init,
-                        fine_tune_bert=not args.freeze_bert, fine_tune_resnet=not args.freeze_resnet)
+                        fine_tune_bert=not args.freeze_bert, fine_tune_resnet=not args.freeze_resnet,
+                        dropout=args.dropout, similarity_weighting=args.similarity_weighting,
+                        alignment_head=args.alignment_head, normalize_streams=args.normalize_streams,
+                        fine_tune_matching=not args.freeze_matching)
+    cfg.clip_preprocess = args.clip_preprocess
+    cfg.augment_unimodal_clip = args.augment_unimodal_clip
     model = FNDCLIP(cfg).to(device)
+    if args.matching_checkpoint:
+        matching_checkpoint = torch.load(args.matching_checkpoint, map_location='cpu', weights_only=False)
+        model.matching_head.load_state_dict(matching_checkpoint['model'])
 
     bert_tok, clip_tok = load_tokenizers(cfg)
 
     def loader(split, train):
-        ds = FakeNewsDataset(args.csv, split, bert_tok, clip_tok, train=train, image_root=args.image_root)
+        ds = FakeNewsDataset(args.csv, split, bert_tok, clip_tok, train=train, image_root=args.image_root,
+                             clip_preprocess=cfg.clip_preprocess)
         if args.limit:
             ds.rows = ds.rows[: args.limit]
         sampler = None
@@ -192,9 +231,10 @@ def main(argv=None) -> int:
             if n_real and n_fake:
                 w_real, w_fake = 0.5 / n_real, 0.5 / n_fake      # real and fake each get half the draws
                 weights = [w_real if r["label_binary"] == "0" else w_fake for r in ds.rows]
-                sampler = WeightedRandomSampler(weights, num_samples=len(ds.rows), replacement=True)
+                draws = args.samples_per_epoch or len(ds.rows)
+                sampler = WeightedRandomSampler(weights, num_samples=draws, replacement=True)
                 print(f"oversampling: train has {n_real} real / {n_fake} fake rows; "
-                      f"each epoch draws {len(ds.rows)} with real:fake = 1:1")
+                      f"each epoch draws {draws} with real:fake = 1:1")
         return DataLoader(ds, batch_size=args.batch_size, shuffle=(train and sampler is None), sampler=sampler,
                           num_workers=args.num_workers, collate_fn=collate, pin_memory=(device.type == "cuda"))
 
@@ -202,24 +242,28 @@ def main(argv=None) -> int:
     print(f"rows: train {len(train_loader.dataset)}  val {len(val_loader.dataset)}  test {len(test_loader.dataset)}")
 
     optimizer = torch.optim.AdamW(model.parameter_groups(args.lr_backbone, args.lr_head, args.weight_decay))
-    key = "f1" if args.task == "binary" else "f1_macro"
+    key = args.selection_metric if args.task == "binary" else "f1_macro"
     best, best_epoch, bad_epochs, history = -1.0, 0, 0, []
 
     for epoch in range(1, args.epochs + 1):
         print(f"\nepoch {epoch}/{args.epochs}")
-        tr = run_epoch(model, train_loader, device, args.task, optimizer)
+        tr = run_epoch(model, train_loader, device, args.task, optimizer, alignment_loss_weight=args.alignment_loss_weight)
         print("  train: " + summary(tr, args.task))
         va = run_epoch(model, val_loader, device, args.task)
         print("  val:   " + summary(va, args.task))
+        write_predictions(out_dir / f"val_predictions_epoch_{epoch}.csv", va["_rows"])
         history.append({"epoch": epoch,
                         "train": {k: v for k, v in tr.items() if k != "_rows"},
                         "val": {k: v for k, v in va.items() if k != "_rows"}})
         with open(out_dir / "history.json", "w") as f:
             json.dump(history, f, indent=2)
+        checkpoint = {"model": model.state_dict(), "config": cfg.__dict__, "epoch": epoch,
+                      "val": history[-1]["val"], "args": vars(args)}
+        if args.save_all_checkpoints:
+            torch.save(checkpoint, out_dir / f"epoch_{epoch}.pt")
         if va[key] > best:
             best, best_epoch, bad_epochs = va[key], epoch, 0
-            torch.save({"model": model.state_dict(), "config": cfg.__dict__, "epoch": epoch,
-                        "val": history[-1]["val"], "args": vars(args)}, out_dir / "best.pt")
+            torch.save(checkpoint, out_dir / "best.pt")
             print(f"  saved best.pt (val {key} {best:.4f})")
         else:
             bad_epochs += 1
@@ -227,6 +271,9 @@ def main(argv=None) -> int:
                 print(f"  no val improvement for {args.patience} epochs, stopping")
                 break
 
+    if args.skip_test:
+        print(f"best epoch {best_epoch} (val {key} {best:.4f}); test reserved for fnd.evaluate")
+        return 0
     print(f"\nbest epoch {best_epoch} (val {key} {best:.4f}); evaluating on test")
     model.load_state_dict(torch.load(out_dir / "best.pt", map_location=device)["model"])
     te = run_epoch(model, test_loader, device, args.task)
@@ -241,6 +288,13 @@ def main(argv=None) -> int:
         w.writerows(rows)
     print(f"wrote {out_dir / 'test_metrics.json'} and {out_dir / 'test_predictions.csv'}")
     return 0
+
+
+def write_predictions(path, rows):
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 if __name__ == "__main__":

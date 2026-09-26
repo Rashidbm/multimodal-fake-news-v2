@@ -1,0 +1,30 @@
+{
+  "name": "Additional unique-pair candidate: extra1_ooc0.25_c0.001",
+  "classifier": {
+    "path": "extra1_ooc0.25_c0.001.joblib",
+    "sha256": "4707dc17f25db518c5767eb18e367a9bdd71df03e226a2baeef75aeee13b799e"
+  },
+  "v1_checkpoint": {
+    "path": "epoch_5.pt",
+    "sha256": "1db5ed0d5c1fdff70ce1c6d9cc4b91ff8330f8c2aa0bc630442b5c32180a60f5"
+  },
+  "blip_model": "Salesforce/blip-itm-base-coco",
+  "blip_revision": "bed8ad38cb2d04a5a4bdf2d071b3c3c0a4aa724c",
+  "output": "Binary real/fake; fake score is the sum of all non-genuine category probabilities",
+  "input": "Image pixels and caption tokens only",
+  "threshold": 0.3552747289549618,
+  "semantic_export": "768 joint features: classifier directions plus training-only PCA complement. Selected logits are preserved. New feature semantics require retraining downstream heads and new caches.",
+  "selected_on": "Minimum scenario/domain recall on development, subject to mean balanced accuracy floor; no test fitting",
+  "clip_large": {
+    "name": "openai/clip-vit-large-patch14",
+    "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41"
+  },
+  "training_csv": {
+    "path": "Not required for inference; see original training hash",
+    "sha256": "324a9cc578fc9134619f9dcc8b5f24852b26b23c37a643d32af3b6feb16d3628"
+  },
+  "semantic_projection": {
+    "path": "semantic_projection.npz",
+    "sha256": "f52c121e2a9365f51c8b01d3455062c67b7245d5f1df938571eaed410afed074"
+  }
+}

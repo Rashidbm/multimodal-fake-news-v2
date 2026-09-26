@@ -1,0 +1,21 @@
+{
+  "weights_in_git": false,
+  "files": [
+    {
+      "filename": "head.pt",
+      "size_bytes": 14986801,
+      "sha256": "a8d4bdcefeac370887e465258c19a5dbb72f446ececdb335e668610bfdf4c3ba"
+    },
+    {
+      "filename": "rgb_robust.pt",
+      "size_bytes": 94342189,
+      "sha256": "30e54db331e13d2dc36a7d273a13e62b92a70e291f60e2f6d098f05e67408def"
+    },
+    {
+      "filename": "dct_guide.pt",
+      "size_bytes": 94317101,
+      "sha256": "23e3ba5354ea147532e6fe6c128d29d3e0f3b73639c6e7d3b1f36d11a373c7b3"
+    }
+  ],
+  "source_directory": "MultiGuard_Windows_demo/outputs/image_branch_2026_09_14/selected_news"
+}

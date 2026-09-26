@@ -1,0 +1,26 @@
+{
+  "format_version": 1,
+  "encoders": {
+    "rgb_robust": {
+      "kind": "rgb",
+      "checkpoint": "rgb_robust.pt",
+      "checkpoint_sha256": "30e54db331e13d2dc36a7d273a13e62b92a70e291f60e2f6d098f05e67408def"
+    }
+  },
+  "head": "head.pt",
+  "head_sha256": "56ee418fa03bb282019351b576faacc04666673bf8d099e8dd489e3f0edaee8a",
+  "threshold": 0.938739974857322,
+  "target": "0 authentic image; 1 AI-generated image",
+  "feature_dimension": 768,
+  "raw_feature_dimension": 2048,
+  "projection": "Classifier direction plus 767 training-only residual PCA components",
+  "projection_fit_rows": 32000,
+  "max_projection_logit_error": 6.339736177807254e-05,
+  "max_float32_scaling_logit_error": 5.720629083327822e-06,
+  "source_classifier_sha256": "30e54db331e13d2dc36a7d273a13e62b92a70e291f60e2f6d098f05e67408def",
+  "selection_sha256": "34864ed0851d0d41f78a17efbfa911fc9e7189f83622f2c0c3ffb2ae18e8dc1d",
+  "source_cache_sha256": "4bc422f9d400cf34195396ca3a1e52015f1cdf3d077530f42669abe339f2dfec",
+  "input": "Image pixels only; no text, labels, filenames or metadata enter encoders",
+  "training_target": "0 nature, 1 AI-generated",
+  "integration_note": "No fusion with the project text or semantic branch has been trained or evaluated by this export"
+}

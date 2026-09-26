@@ -20,8 +20,13 @@ def binary_metrics(y_true: list[int], prob: list[float], threshold: float = 0.5)
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    real_recall = tn / (tn + fp) if tn + fp else 0.0
+    real_precision = tn / (tn + fn) if tn + fn else 0.0
+    real_f1 = 2 * tn / (2 * tn + fp + fn) if 2 * tn + fp + fn else 0.0
     return {"n": n, "accuracy": (tp + tn) / n, "precision": precision, "recall": recall,
-            "f1": f1, "auc": auc(y_true, prob), "tp": tp, "tn": tn, "fp": fp, "fn": fn}
+            "f1": f1, "auc": auc(y_true, prob), "tp": tp, "tn": tn, "fp": fp, "fn": fn,
+            "real_recall": real_recall, "real_precision": real_precision, "real_f1": real_f1,
+            "balanced_accuracy": (recall + real_recall) / 2, "f1_macro": (f1 + real_f1) / 2}
 
 
 def auc(y_true: list[int], score: list[float]) -> float:
@@ -59,6 +64,14 @@ def multiclass_metrics(y_true: list[int], y_pred: list[int], num_classes: int) -
     return {"n": n, "accuracy": acc, "f1_macro": sum(f1s) / num_classes, "f1_per_class": f1s}
 
 
+def per_scenario_accuracy(scenarios: list[int], y_true: list[int], y_pred: list[int]) -> dict:
+    hit, tot = defaultdict(int), defaultdict(int)
+    for s, t, p in zip(scenarios, y_true, y_pred):
+        tot[s] += 1
+        hit[s] += int(t == p)
+    return {int(s): {"n": tot[s], "accuracy": hit[s] / tot[s]} for s in sorted(tot)}
+
+
 def confusion_matrix(y_true: list[int], y_pred: list[int], num_classes: int) -> list[list[int]]:
     """m[t][p] = how many samples of true class t were predicted as p."""
     m = [[0] * num_classes for _ in range(num_classes)]
@@ -77,14 +90,6 @@ def format_confusion(m: list[list[int]], labels: list[str] | None = None) -> str
     for i, row in enumerate(m):
         lines.append(f"{labels[i][:w]:>{w}} | " + " ".join(f"{v:>{w}}" for v in row))
     return "\n".join(lines)
-
-
-def per_scenario_accuracy(scenarios: list[int], y_true: list[int], y_pred: list[int]) -> dict:
-    hit, tot = defaultdict(int), defaultdict(int)
-    for s, t, p in zip(scenarios, y_true, y_pred):
-        tot[s] += 1
-        hit[s] += int(t == p)
-    return {int(s): {"n": tot[s], "accuracy": hit[s] / tot[s]} for s in sorted(tot)}
 
 
 def per_group_accuracy(keys: list, y_true: list[int], y_pred: list[int]) -> dict:
