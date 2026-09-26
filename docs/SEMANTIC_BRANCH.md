@@ -54,7 +54,9 @@ Place these three **separately transferred** files in that same directory:
 Exact hashes are in [ARTIFACTS.json](../models/semantic/ARTIFACTS.json); inference
 checks them. These files exist in the previously assembled full Windows demo
 under `outputs/semantic_resolution/selected/`. The small fusion-only package does
-not contain them. There is no checkpoint download URL published by this branch.
+not contain them. Alternatively, download and extract `semantic-weights.zip`
+from the [model release](https://github.com/Rashidbm/multimodal-fake-news-v2/releases/tag/semantic-image-models-2026-09-26)
+into the repository root; it supplies these files under `models/semantic/`.
 
 BLIP and CLIP-L download from their pinned Hugging Face revisions on first use.
 The FND checkpoint records its own configuration; its pretrained encoder/tokenizer

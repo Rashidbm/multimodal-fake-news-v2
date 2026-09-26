@@ -72,7 +72,10 @@ classifier and feature projection. Keep each head with its own bundle.
 
 These files are available locally in the existing full Windows demo under
 `outputs/image_branch_2026_09_14/selected_news`, `selected`, and `selected_ai`.
-They are not included in Git. CLIP-L must also be downloaded into the model cache;
+They are also available as `image-weights.zip` in the
+[model release](https://github.com/Rashidbm/multimodal-fake-news-v2/releases/tag/semantic-image-models-2026-09-26).
+Extract it into the repository root to populate all three `models/image/` variants.
+The weights are release assets, not Git source files. CLIP-L must also be downloaded into the model cache;
 see the root README. DCT normalization statistics are embedded in each bundle.
 
 ```text

@@ -23,11 +23,23 @@ On NVIDIA machines, install the appropriate CUDA-enabled PyTorch/torchvision bui
 first. Python 3.13.11, torch 2.11.0 and torchvision 0.26.0 were verified on macOS.
 Windows/CUDA execution is not newly verified here.
 
-**Trained binary files are transferred separately.** Put the files listed in each
-`ARTIFACTS.json` beside its `bundle.json` under `models/semantic/` and the selected
-`models/image/{news,broad,ai}/` directory. The existing full Windows demo contains
-these files; the fusion-only archive does not. Cloning code does not download our
-trained weights. Their SHA-256 hashes are checked during inference.
+**Download the trained weights from the [model release](https://github.com/Rashidbm/multimodal-fake-news-v2/releases/tag/semantic-image-models-2026-09-26).**
+Download `semantic-weights.zip` and `image-weights.zip`, plus their `.sha256` files.
+The archives contain `models/semantic/` and `models/image/{news,broad,ai}/` and can
+be extracted directly into this repository. Cloning code does not download the
+weights. No retraining is needed for inference or feature extraction.
+
+On Windows, place the downloads in the repository root. Verify each archive's
+SHA-256 with `Get-FileHash` against its accompanying `.sha256` file, then run:
+
+```powershell
+Expand-Archive .\semantic-weights.zip -DestinationPath . -Force
+Expand-Archive .\image-weights.zip -DestinationPath . -Force
+```
+
+Each bundle's `ARTIFACTS.json` lists its trained files; inference also checks
+their hashes. The release contains neither dataset images nor the text model or
+a trained multimodal fusion checkpoint.
 
 The image loader requires the pinned CLIP-L weights in the Hugging Face cache.
 Download them once before offline use:
