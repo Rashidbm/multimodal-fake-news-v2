@@ -173,3 +173,70 @@ Tests use synthetic inputs and do not download model weights. They verify model
 shapes, label/input isolation, probability handling, threshold selection, feature
 projection equivalence and dataset logic. Real-checkpoint inference additionally
 requires the three model files and pretrained caches described above.
+
+## Experiment: Qwen3-VL-Embedding-8B in place of CLIP-L
+
+Branch `experiment/semantic-qwen3vl-embedding`. Only the third feature block changes:
+
+| | Baseline | Experiment |
+|---|---|---|
+| Third block | CLIP-L `[img, txt, img*txt, abs(img-txt), cos]`, 3,073 | one joint image+caption embedding, D (4,096 for the 8B model) |
+| Feature kind | `blip_v1_clip_large`, 4,611 | `blip_v1_qwen_embedding`, 1,538 + D |
+
+FND-CLIP, BLIP, labels, the Logistic Regression grid, `protected_point` selection and
+`fit_projection` are unchanged. Qwen is frozen and runs through the official
+`Qwen3VLEmbedder` shipped in the checkpoint (`<model>/scripts/qwen3_vl_embedding.py`):
+default instruction, dynamic-resolution images, built-in pooling and L2 normalization.
+The fitted scaler, classifier, threshold and projection are new for the Qwen arm;
+`models/semantic/` is never read for fitted artifacts and never written.
+
+Setup: `pip install -r requirements-semantic.txt` (adds `qwen-vl-utils`) and point
+`QWEN_MODEL_PATH` at the local model directory (`export QWEN_MODEL_PATH=...`, or
+`$env:QWEN_MODEL_PATH = "..."` in PowerShell). Loading is offline (`local_files_only`).
+The GPU is chosen with `CUDA_VISIBLE_DEVICES`; one BF16 copy per RTX 4090.
+
+```text
+# 1. Smoke: images, local load, CUDA, dimension, norms, batch invariance, cache write
+python -m fnd.cache_qwen_embedding --csv TRAIN_DEV.csv --out features/qwen/smoke.pt --smoke 4 --batch-size 4
+
+# 2. Extract once, one process per GPU, then merge in CSV order
+CUDA_VISIBLE_DEVICES=0 python -m fnd.cache_qwen_embedding --csv TRAIN_DEV.csv --out features/qwen/train_dev.0.pt --shard 0/2 --batch-size 4
+CUDA_VISIBLE_DEVICES=1 python -m fnd.cache_qwen_embedding --csv TRAIN_DEV.csv --out features/qwen/train_dev.1.pt --shard 1/2 --batch-size 4
+python -m fnd.cache_qwen_embedding --csv TRAIN_DEV.csv --out features/qwen/train_dev.pt --merge features/qwen/train_dev.0.pt features/qwen/train_dev.1.pt
+# Repeat for each evaluation CSV with --splits listing every split value in that CSV.
+
+# 3. Fit each arm on identical rows and FND/BLIP caches (validation-only selection)
+python -m fnd.fit_semantic_arm fit --third clip_large     --csv TRAIN_DEV.csv --blip BLIP.pt --v1 V1.pt --third-cache CLIP.pt              --out outputs/semantic_arms/clip_large
+python -m fnd.fit_semantic_arm fit --third qwen_embedding --csv TRAIN_DEV.csv --blip BLIP.pt --v1 V1.pt --third-cache features/qwen/train_dev.pt --out outputs/semantic_arms/qwen_embedding
+
+# 4. Evaluate both locked arms once
+python -m fnd.fit_semantic_arm evaluate --eval-csv EVAL.csv --blip EVAL_BLIP.pt --v1 EVAL_V1.pt --out outputs/semantic_arms/evaluation \
+    --arm clip_large outputs/semantic_arms/clip_large EVAL_CLIP.pt --arm qwen_embedding outputs/semantic_arms/qwen_embedding features/qwen/eval.pt
+
+# 5. Export the Qwen bundle (768-d projection) and v_semantic for Fusion
+python -m fnd.fit_semantic_arm export --fit-dir outputs/semantic_arms/qwen_embedding --csv TRAIN_DEV.csv --blip BLIP.pt --v1 V1.pt \
+    --third-cache features/qwen/train_dev.pt --out outputs/semantic_arms/qwen_bundle
+python -m fnd.cache_semantic_bundle --bundle outputs/semantic_arms/qwen_bundle/bundle.json --csv FUSION.csv --out artifacts/semantic_qwen_features.pt --device cuda
+```
+
+**Case A, original artifacts present:** use `data/processed/semantic_resolution_train_dev.csv`,
+the `outputs/semantic_resolution/expanded_{blip,v1,clip}.pt` caches, and add to both `fit` calls
+`--extra-csv data/processed/semantic_resolution_extra_train.csv --reference-diagnostic
+outputs/semantic_resolution/incumbent_diagnostic.json --reference-manifest
+outputs/semantic_resolution/data_volume/manifest.json`. Evaluate `data/processed/recall_evaluation.csv`
+with the `outputs/recall_improvement/eval_{blip,old_v1,clip_large}.pt` caches, `--evaluation-group
+v1_five_scenarios` and `--expect-predictions reports/semantic/five_scenario_predictions.csv`: the
+CLIP arm must reproduce the recorded predictions (error < 1e-10) before the Qwen result is accepted.
+Run the evaluation again on `data/processed/semantic_resolution_confirmation.csv` with the
+`outputs/semantic_resolution/confirmation_{blip,v1,clip}.pt` caches for the paired genuine/OOC comparison. If image paths in the CSVs point elsewhere, add
+`--path-prefix OLD=NEW` to the Qwen extraction; the CSV and its hash stay unchanged.
+
+**Case B, artifacts missing:** freeze one CSV with `sample_id, split, text, image_path, scenario,
+label_binary, evaluation_group, caption_id`, extract FND/BLIP/CLIP-L/Qwen caches from it, and fit both
+arms without the reference options. The historical 90.45% is then not a direct benchmark.
+
+Outputs: `fit` writes every candidate, `results.json` and `selection.json`; `evaluate` writes
+`evaluation.json` and per-arm predictions; `export` writes `bundle.json` (`feature_kind`,
+`qwen_embedding` settings and hashes), the classifier, `semantic_projection.npz` and `ARTIFACTS.json`.
+The bundle is rejected if its classifier kind and encoders disagree. `cache_semantic_bundle`
+fails unless the exported features are `[N, 768]`.

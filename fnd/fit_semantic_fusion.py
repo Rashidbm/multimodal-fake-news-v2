@@ -72,7 +72,16 @@ def metrics(rows, probabilities, threshold):
     return domains, predictions
 
 
-def feature_matrix(blip, v1, kind, clip_large=None):
+def feature_matrix(blip, v1, kind, clip_large=None, qwen=None):
+    if kind == 'blip_v1_qwen_embedding':
+        # Frozen Qwen3-VL-Embedding joint image+caption vector replaces the CLIP-L block.
+        if qwen is None:
+            raise ValueError('This feature kind needs Qwen3-VL-Embedding features')
+        base = feature_matrix(blip, v1, 'blip_v1_features')
+        extra = np.asarray(qwen['features'], dtype=base.dtype)
+        if extra.ndim != 2 or len(extra) != len(base):
+            raise ValueError('Qwen features must be [N, D] and aligned with the BLIP/V1 rows')
+        return np.concatenate([base, extra], axis=-1)
     if kind == 'v1_only':
         return np.concatenate([v1['hidden'].numpy(), v1['logit'].numpy()[:, None]], -1)
     if kind in ['clip_large_only', 'blip_v1_clip_large', 'blip_v1_clip_large_match', 'blip_v1_clip_large_score']:

@@ -16,6 +16,7 @@ from .models.fnd_clip import FNDCLIP, FNDCLIPConfig
 from .train import load_tokenizers
 from .train_clip_matcher import digest
 from .cache_clip_large import embedding
+from .cache_qwen_embedding import PROVENANCE_KEYS as QWEN_PROVENANCE_KEYS, encode as encode_qwen, load_embedder as load_qwen_embedder
 
 
 class SemanticFusionPredictor:
@@ -40,6 +41,16 @@ class SemanticFusionPredictor:
             raise ValueError('Bundle and classifier thresholds disagree')
         self.semantic_projection = (dict(np.load(artifact('semantic_projection')))
                                     if 'semantic_projection' in self.bundle else None)
+        uses_qwen = self.fusion['kind'] == 'blip_v1_qwen_embedding'
+        if uses_qwen != ('qwen_embedding' in self.bundle) or (uses_qwen and 'clip_large' in self.bundle):
+            raise ValueError('Classifier feature kind and bundle encoders disagree (CLIP-L vs Qwen)')
+        self.qwen = None
+        if uses_qwen:
+            source = self.bundle['qwen_embedding']
+            self.qwen = load_qwen_embedder(min_pixels=source['min_pixels'], max_pixels=source['max_pixels'], device=device)
+            changed = [k for k in QWEN_PROVENANCE_KEYS if self.qwen.provenance[k] != source[k]]
+            if changed:
+                raise ValueError(f'Local Qwen model/settings differ from the bundle: {changed}')
         self.blip = None
         if self.fusion['kind'] not in ['v1_only', 'clip_large_only']:
             self.processor = BlipProcessor.from_pretrained(self.bundle['blip_model'], revision=self.bundle['blip_revision'])
@@ -98,7 +109,8 @@ class SemanticFusionPredictor:
                 torch.stack([self.clip_transform(image) for image in images]).to(self.device),
                 clip['input_ids'].to(self.device), clip['attention_mask'].to(self.device))
             v1 = dict(hidden=result['semantic'].cpu(), logit=result['logits'].squeeze(-1).cpu())
-        features = feature_matrix(blip, v1, self.fusion['kind'], large)
+        qwen = dict(features=encode_qwen(self.qwen, images, captions)) if self.qwen is not None else None
+        features = feature_matrix(blip, v1, self.fusion['kind'], large, qwen=qwen)
         values = probability(self.fusion['model'], features, self.fusion['task'])
         mismatch_values = blip['logit'].sigmoid().tolist() if blip is not None else [None]*len(images)
         predictions = [dict(fake_probability=float(value), prediction='fake' if value >= self.threshold else 'real',

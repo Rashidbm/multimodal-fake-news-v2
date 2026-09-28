@@ -10,3 +10,6 @@ joblib==1.5.3
 Pillow==12.1.0
 threadpoolctl==3.6.0
 pytest==9.0.2
+# Qwen3-VL-Embedding experiment only: imported by the official embedder script shipped
+# with the checkpoint (<model>/scripts/qwen3_vl_embedding.py). Pin after the Training-PC smoke test.
+qwen-vl-utils>=0.0.14
