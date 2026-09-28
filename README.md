@@ -11,6 +11,8 @@ evaluation; the fusion inputs are the feature vectors.
 
 Read [semantic documentation](docs/SEMANTIC_BRANCH.md) and
 [image documentation](docs/IMAGE_BRANCH.md) for training, model files and metrics.
+[Fusion and dashboard](docs/Qwen3VL_FUSION.md) covers the CLIP-L vs Qwen3-VL-Embedding
+comparison, fusion training and results, and the web dashboard.
 
 ## Setup
 
