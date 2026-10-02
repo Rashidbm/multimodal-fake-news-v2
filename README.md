@@ -20,6 +20,12 @@ reproducibility but is not part of the pipeline and is not required to run it.
 - [Fusion results](docs/FUSION_RESULTS.md) (`fnd.train_fusion`, single-seed results)
 - [Dashboard](docs/DASHBOARD.md) (live branches; five-class verdict via the V3 fusion plugin when a checkpoint is supplied)
 
+### Run the Demo
+
+See [docs/DASHBOARD.md](docs/DASHBOARD.md) for the Training PC quick-start and required model paths
+(CLIP-L semantic branch, Qwen3.5-9B text branch, V3 fusion checkpoint via `dashboard.v3_fusion:load_fusion`;
+the Qwen3-VL-Embedding experiment is not used).
+
 ## Setup
 
 ```text
