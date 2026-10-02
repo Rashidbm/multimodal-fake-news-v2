@@ -1,0 +1,5 @@
+# Optional: only for `python -m dashboard.server`. Install alongside requirements-semantic.txt
+# and requirements-forensic.txt. No Qwen3-VL-Embedding dependency is needed.
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9

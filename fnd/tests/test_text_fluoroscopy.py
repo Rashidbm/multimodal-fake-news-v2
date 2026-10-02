@@ -203,13 +203,13 @@ def test_extract_end_to_end_smoke(tmp_path):
     csv_path = _write_csv(tmp_path / "rows.csv", n=4)
     out = tmp_path / "v_textfor.pt"
     rc = extract_main(["--csv", str(csv_path), "--out", str(out),
-                       "--model", "Qwen/Qwen2-0.5B-Instruct",
+                       "--model", "Qwen/Qwen2-0.5B-Instruct", "--layer", "12",
                        "--batch-size", "2", "--device", "cpu"])
     assert rc == 0
 
     payload = torch.load(out, weights_only=False)
     assert payload["features"].shape == (4, 896)
-    assert payload["sample_ids"] == [f"mmfb_{i:04d}" for i in range(4)]
+    assert payload["ids"] == [f"mmfb_{i:04d}" for i in range(4)]
     assert payload["meta"]["pooling"] == "masked_mean"
     assert payload["meta"]["projected"] is False
 

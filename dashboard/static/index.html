@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MultiGuard</title>
+<style>
+  @font-face { font-family: "Thmanyah Sans"; src: url("fonts/thmanyahsans-Regular.woff2") format("woff2"); font-weight: 400; }
+  @font-face { font-family: "Thmanyah Sans"; src: url("fonts/thmanyahsans-Medium.woff2") format("woff2"); font-weight: 500; }
+  @font-face { font-family: "Thmanyah Sans"; src: url("fonts/thmanyahsans-Bold.woff2") format("woff2"); font-weight: 700; }
+  @font-face { font-family: "Thmanyah Serif Display"; src: url("fonts/thmanyahserifdisplay-Bold.woff2") format("woff2"); font-weight: 700; }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f3f4f6; min-height: 100vh; }
+  [dir="rtl"], [dir="rtl"] * { font-family: "Thmanyah Sans", sans-serif; }
+  [dir="rtl"] .hero h1, [dir="rtl"] .loading-title, [dir="rtl"] .verdict-title { font-family: "Thmanyah Serif Display", serif; }
+
+  .app { max-width: 1100px; margin: 0 auto; padding: 0 20px; }
+
+  /* Header */
+  .header { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 32px; }
+  .logo { font-size: 22px; font-weight: 700; color: #1e40af; display: flex; align-items: center; gap: 10px; }
+  .logo-icon { width: 36px; height: 36px; background: linear-gradient(135deg, #1e40af, #3b82f6); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; }
+  .nav { display: flex; gap: 20px; align-items: center; }
+  .nav a { text-decoration: none; font-size: 14px; color: #4b5563; cursor: pointer; }
+  .nav a.active { color: #1e40af; font-weight: 600; }
+  .lang-switch { padding: 5px 12px; border: 1px solid #d1d5db; background: white; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .lang-switch.active { background: #1e40af; color: white; border-color: #1e40af; }
+
+  /* Screens (show/hide) */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* Hero */
+  .hero { text-align: center; padding: 24px 0 32px; }
+  .hero h1 { font-size: 32px; font-weight: 700; color: #111827; margin-bottom: 10px; }
+  .hero p { font-size: 16px; color: #6b7280; max-width: 600px; margin: 0 auto; line-height: 1.6; }
+
+  /* Form */
+  .form-section { background: #f9fafb; border-radius: 12px; padding: 32px; border: 1px solid #e5e7eb; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .form-group label { display: block; font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 8px; }
+  .form-group textarea { width: 100%; min-height: 180px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit; }
+  .upload-box { border: 2px dashed #d1d5db; border-radius: 8px; padding: 48px 24px; text-align: center; min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; background: white; transition: border-color .2s; position: relative; }
+  .upload-box:hover, .upload-box.dragover { border-color: #3b82f6; background: #eff6ff; }
+  .upload-box.has-file { border-color: #10b981; background: #f0fdf4; }
+  .upload-icon { font-size: 42px; color: #9ca3af; margin-bottom: 12px; }
+  .upload-text { font-size: 14px; color: #4b5563; }
+  .upload-hint { font-size: 12px; color: #9ca3af; margin-top: 4px; }
+  .upload-preview { max-width: 100%; max-height: 160px; border-radius: 6px; margin-top: 8px; }
+  .submit-btn { width: 100%; padding: 14px; background: linear-gradient(135deg, #1e40af, #3b82f6); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 24px; transition: opacity .2s; }
+  .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .submit-btn:hover:not(:disabled) { opacity: 0.9; }
+  #fileInput { display: none; }
+
+  /* Loading */
+  .loading-screen { text-align: center; padding: 60px 0; }
+  .loading-title { font-size: 24px; font-weight: 700; color: #111827; margin-bottom: 8px; }
+  .loading-sub { color: #6b7280; margin-bottom: 40px; }
+  .modules-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 900px; margin: 0 auto; }
+  .module-card { background: white; border: 1px solid #e5e7eb; border-radius: 10px; padding: 20px; text-align: center; transition: all .4s; }
+  .module-card.done { border-color: #10b981; background: #f0fdf4; }
+  .module-card.running { border-color: #1e40af; background: #eff6ff; }
+  .module-icon { font-size: 32px; margin-bottom: 10px; }
+  .module-name { font-size: 13px; font-weight: 600; color: #111827; margin-bottom: 4px; }
+  .module-status { font-size: 12px; color: #6b7280; }
+  .module-status.done { color: #10b981; }
+  .module-status.running { color: #1e40af; }
+
+  /* Results */
+  .results-container { display: grid; grid-template-columns: 1fr 1.4fr; gap: 24px; }
+  .verdict-card { background: white; border-radius: 12px; padding: 28px; text-align: center; }
+  .verdict-card.real { border: 2px solid #10b981; }
+  .verdict-card.manipulated { border: 2px solid #ef4444; }
+  .verdict-card.ooc { border: 2px solid #f59e0b; }
+  .verdict-card.ai-text { border: 2px solid #8b5cf6; }
+  .verdict-card.fabricated { border: 2px solid #dc2626; }
+  .verdict-label { font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+  .verdict-title { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .verdict-title.real { color: #047857; }
+  .verdict-title.manipulated { color: #dc2626; }
+  .verdict-title.ooc { color: #d97706; }
+  .verdict-title.ai-text { color: #7c3aed; }
+  .verdict-title.fabricated { color: #dc2626; }
+  .confidence-bar { height: 8px; background: #f3f4f6; border-radius: 4px; overflow: hidden; margin: 20px 0 8px; }
+  .confidence-fill { height: 100%; transition: width .6s; }
+  .confidence-fill.real { background: #10b981; }
+  .confidence-fill.manipulated { background: #ef4444; }
+  .confidence-fill.ooc { background: #f59e0b; }
+  .confidence-fill.ai-text { background: #8b5cf6; }
+  .confidence-fill.fabricated { background: #dc2626; }
+  .confidence-text { font-size: 13px; color: #4b5563; }
+  .explanation { border-radius: 8px; padding: 14px; margin-top: 20px; font-size: 13px; line-height: 1.6; }
+  .explanation.real { background: #f0fdf4; color: #065f46; }
+  .explanation.manipulated { background: #fef2f2; color: #7f1d1d; }
+  .explanation.ooc { background: #fffbeb; color: #78350f; }
+  .explanation.ai-text { background: #f5f3ff; color: #4c1d95; }
+  .explanation.fabricated { background: #fef2f2; color: #7f1d1d; }
+  .scores-panel { background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; }
+  .scores-title { font-size: 15px; font-weight: 600; color: #111827; margin-bottom: 18px; }
+  .score-row { display: grid; grid-template-columns: 200px 1fr 60px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid #f3f4f6; font-size: 13px; }
+  .score-row:last-child { border-bottom: none; }
+  .score-bar { height: 6px; background: #f3f4f6; border-radius: 3px; overflow: hidden; }
+  .score-bar-fill { height: 100%; transition: width .6s; }
+  .score-value { font-weight: 600; text-align: right; }
+  .action-bar { display: flex; gap: 12px; margin-top: 24px; }
+  .btn { padding: 10px 20px; border: 1px solid #d1d5db; background: white; border-radius: 8px; font-size: 14px; cursor: pointer; color: #374151; }
+  .btn.primary { background: #1e40af; color: white; border-color: #1e40af; }
+
+  /* Probabilities bar chart */
+  .prob-section { margin-top: 20px; }
+  .prob-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+  .prob-label { width: 110px; color: #4b5563; }
+  .prob-bar-bg { flex: 1; height: 20px; background: #f3f4f6; border-radius: 4px; overflow: hidden; }
+  .prob-bar-fill { height: 100%; border-radius: 4px; transition: width .6s; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; font-size: 11px; font-weight: 600; color: white; min-width: 30px; }
+
+  /* Error */
+  .error-box { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+
+  @media (max-width: 768px) {
+    .form-grid, .results-container { grid-template-columns: 1fr; }
+    .modules-grid { grid-template-columns: repeat(2, 1fr); }
+    .score-row { grid-template-columns: 140px 1fr 50px; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo"><div class="logo-icon">M</div>MultiGuard</div>
+    <div class="nav">
+      <a class="active" onclick="showScreen('submit')">Verify</a>
+      <a href="#">About</a>
+      <button class="lang-switch" id="langBtn" onclick="toggleLang()">AR</button>
+    </div>
+  </div>
+
+  <!-- SCREEN: Submit -->
+  <div class="screen active" id="screen-submit">
+    <div class="hero">
+      <h1 id="heroTitle">Verify Any News Article</h1>
+      <p id="heroSub">Upload text and an image to detect AI-generated content, manipulated images, and out-of-context pairings in seconds.</p>
+    </div>
+    <div class="form-section">
+      <div class="form-grid">
+        <div class="form-group">
+          <label id="textLabel">Article Text</label>
+          <textarea id="articleText" placeholder="Paste the article text here..."></textarea>
+        </div>
+        <div class="form-group">
+          <label id="imageLabel">Article Image</label>
+          <div class="upload-box" id="uploadBox" onclick="document.getElementById('fileInput').click()">
+            <div class="upload-icon" id="uploadIcon">📷</div>
+            <div class="upload-text" id="uploadText">Click to upload or drag and drop</div>
+            <div class="upload-hint" id="uploadHint">PNG, JPG up to 10 MB</div>
+          </div>
+          <input type="file" id="fileInput" accept="image/*">
+        </div>
+      </div>
+      <button class="submit-btn" id="submitBtn" onclick="analyze()">Analyze Article</button>
+      <div class="error-box" id="errorBox" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- SCREEN: Loading -->
+  <div class="screen" id="screen-loading">
+    <div class="loading-screen">
+      <div class="loading-title" id="loadingTitle">Analyzing your submission...</div>
+      <div class="loading-sub" id="loadingSub">Running detection modules</div>
+      <div class="modules-grid">
+        <div class="module-card" id="mod-text">
+          <div class="module-icon">📝</div>
+          <div class="module-name">Text Analysis</div>
+          <div class="module-status" id="mod-text-status">Pending</div>
+        </div>
+        <div class="module-card" id="mod-image">
+          <div class="module-icon">🖼️</div>
+          <div class="module-name">Image Forensics</div>
+          <div class="module-status" id="mod-image-status">Pending</div>
+        </div>
+        <div class="module-card" id="mod-cross">
+          <div class="module-icon">🔗</div>
+          <div class="module-name">Cross-Modal Check</div>
+          <div class="module-status" id="mod-cross-status">Pending</div>
+        </div>
+        <div class="module-card" id="mod-fusion">
+          <div class="module-icon">⚡</div>
+          <div class="module-name">Fusion Engine</div>
+          <div class="module-status" id="mod-fusion-status">Pending</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCREEN: Results -->
+  <div class="screen" id="screen-results">
+    <div class="results-container">
+      <div>
+        <div class="verdict-card" id="verdictCard">
+          <div class="verdict-label" id="verdictLabel">Verdict</div>
+          <div class="verdict-title" id="verdictTitle"></div>
+          <div class="confidence-bar"><div class="confidence-fill" id="confFill"></div></div>
+          <div class="confidence-text" id="confText"></div>
+          <div class="explanation" id="explanationBox"></div>
+        </div>
+        <div class="prob-section">
+          <div class="prob-row">
+            <span class="prob-label">Real</span>
+            <div class="prob-bar-bg"><div class="prob-bar-fill" id="probReal" style="background:#10b981"></div></div>
+          </div>
+          <div class="prob-row">
+            <span class="prob-label">Out-of-Context</span>
+            <div class="prob-bar-bg"><div class="prob-bar-fill" id="probOOC" style="background:#f59e0b"></div></div>
+          </div>
+          <div class="prob-row">
+            <span class="prob-label">Manipulated</span>
+            <div class="prob-bar-bg"><div class="prob-bar-fill" id="probManip" style="background:#ef4444"></div></div>
+          </div>
+          <div class="prob-row">
+            <span class="prob-label">AI-Text</span>
+            <div class="prob-bar-bg"><div class="prob-bar-fill" id="probAIText" style="background:#8b5cf6"></div></div>
+          </div>
+          <div class="prob-row">
+            <span class="prob-label">Fully Fabricated</span>
+            <div class="prob-bar-bg"><div class="prob-bar-fill" id="probFabricated" style="background:#dc2626"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="scores-panel">
+        <div class="scores-title" id="scoresTitle">Module Breakdown</div>
+        <div class="score-row">
+          <div>Text (AI Detection)</div>
+          <div class="score-bar"><div class="score-bar-fill" id="bar-text-ai"></div></div>
+          <div class="score-value" id="val-text-ai"></div>
+        </div>
+        <div class="score-row">
+          <div>Text (Patterns)</div>
+          <div class="score-bar"><div class="score-bar-fill" id="bar-text-pat"></div></div>
+          <div class="score-value" id="val-text-pat"></div>
+        </div>
+        <div class="score-row">
+          <div>Image (Forensics)</div>
+          <div class="score-bar"><div class="score-bar-fill" id="bar-img"></div></div>
+          <div class="score-value" id="val-img"></div>
+        </div>
+        <div class="score-row">
+          <div>Cross-Modal Alignment</div>
+          <div class="score-bar"><div class="score-bar-fill" id="bar-cross"></div></div>
+          <div class="score-value" id="val-cross"></div>
+        </div>
+        <div class="score-row">
+          <div>Overall Risk</div>
+          <div class="score-bar"><div class="score-bar-fill" id="bar-overall"></div></div>
+          <div class="score-value" id="val-overall"></div>
+        </div>
+        <div class="action-bar">
+          <button class="btn primary" onclick="showScreen('submit'); resetForm()">Analyze Another</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let selectedFile = null;
+let isArabic = false;
+
+// File upload handling
+const uploadBox = document.getElementById('uploadBox');
+const fileInput = document.getElementById('fileInput');
+
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+uploadBox.addEventListener('dragover', (e) => { e.preventDefault(); uploadBox.classList.add('dragover'); });
+uploadBox.addEventListener('dragleave', () => uploadBox.classList.remove('dragover'));
+uploadBox.addEventListener('drop', (e) => {
+  e.preventDefault();
+  uploadBox.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+function handleFile(file) {
+  selectedFile = file;
+  uploadBox.classList.add('has-file');
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    uploadBox.innerHTML = `<img class="upload-preview" src="${e.target.result}"><div class="upload-text" style="margin-top:8px">${file.name}</div>`;
+  };
+  reader.readAsDataURL(file);
+}
+
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+}
+
+function resetForm() {
+  document.getElementById('articleText').value = '';
+  selectedFile = null;
+  fileInput.value = '';
+  const box = document.getElementById('uploadBox');
+  box.classList.remove('has-file');
+  box.innerHTML = `<div class="upload-icon" id="uploadIcon">📷</div><div class="upload-text" id="uploadText">${isArabic ? 'اضغط للرفع أو اسحب الملف هنا' : 'Click to upload or drag and drop'}</div><div class="upload-hint">${isArabic ? 'PNG أو JPG حتى ١٠ ميغابايت' : 'PNG, JPG up to 10 MB'}</div>`;
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+// Animated loading sequence
+async function animateLoading() {
+  const modules = ['mod-text', 'mod-image', 'mod-cross', 'mod-fusion'];
+  const doneText = isArabic ? '✓ مكتمل' : '✓ Complete';
+  const runText = isArabic ? 'جارٍ المعالجة...' : 'Processing...';
+
+  for (let i = 0; i < modules.length; i++) {
+    const card = document.getElementById(modules[i]);
+    const status = document.getElementById(modules[i] + '-status');
+    card.className = 'module-card running';
+    status.className = 'module-status running';
+    status.textContent = runText;
+    await new Promise(r => setTimeout(r, 400 + Math.random() * 300));
+    card.className = 'module-card done';
+    status.className = 'module-status done';
+    status.textContent = doneText;
+  }
+}
+
+// Reset loading state
+function resetLoading() {
+  ['mod-text', 'mod-image', 'mod-cross', 'mod-fusion'].forEach(id => {
+    document.getElementById(id).className = 'module-card';
+    document.getElementById(id + '-status').className = 'module-status';
+    document.getElementById(id + '-status').textContent = isArabic ? 'في الانتظار' : 'Pending';
+  });
+}
+
+function scoreColor(val) {
+  if (val < 0.3) return '#10b981';
+  if (val < 0.6) return '#f59e0b';
+  return '#ef4444';
+}
+
+function setScore(barId, valId, value) {
+  if (value === null || value === undefined) {   // no model produces this score
+    document.getElementById(barId).style.width = '0%';
+    document.getElementById(valId).textContent = '—';
+    document.getElementById(valId).style.color = '#9ca3af';
+    return;
+  }
+  const pct = Math.round(value * 100);
+  const color = scoreColor(value);
+  document.getElementById(barId).style.width = pct + '%';
+  document.getElementById(barId).style.background = color;
+  document.getElementById(valId).textContent = value.toFixed(2);
+  document.getElementById(valId).style.color = color;
+}
+
+function showResults(data) {
+  const clsMap = {0: 'real', 1: 'ooc', 2: 'manipulated', 3: 'ai-text', 4: 'fabricated'};
+  // label_index is null until a trained fusion model gives a final verdict: no class colour then
+  const cls = data.label_index === null ? '' : (clsMap[data.label_index] || 'real');
+
+  const card = document.getElementById('verdictCard');
+  card.className = 'verdict-card ' + cls;
+  document.getElementById('verdictTitle').className = 'verdict-title ' + cls;
+  document.getElementById('verdictTitle').textContent = isArabic ? data.verdict_ar : data.verdict;
+  document.getElementById('confFill').className = 'confidence-fill ' + cls;
+  document.getElementById('confFill').style.width = (data.confidence || 0) + '%';
+  document.getElementById('confText').innerHTML = data.confidence === null ? ''
+    : (isArabic ? 'الثقة: ' : 'Confidence: ') + '<strong>' + data.confidence + '%</strong>';
+
+  const expBox = document.getElementById('explanationBox');
+  expBox.className = 'explanation ' + cls;
+  expBox.textContent = isArabic ? data.explanation_ar : data.explanation;
+
+  // Probability bars (5 classes)
+  const p = data.probabilities;
+  function setProb(id, key) {
+    const el = document.getElementById(id);
+    if (!p) {   // no fused model yet, so no class probabilities
+      el.style.width = '0%';
+      el.style.minWidth = '0';
+      el.textContent = '';
+      return;
+    }
+    el.style.minWidth = '';
+    const val = (p[key] || 0) * 100;
+    el.style.width = val + '%';
+    el.textContent = val.toFixed(1) + '%';
+  }
+  setProb('probReal', 'Real');
+  setProb('probOOC', 'Out-of-Context');
+  setProb('probManip', 'Manipulated');
+  setProb('probAIText', 'AI-Text');
+  setProb('probFabricated', 'Fully-Fabricated');
+
+  // Module scores
+  const m = data.modules;
+  setScore('bar-text-ai', 'val-text-ai', m.text_ai);
+  setScore('bar-text-pat', 'val-text-pat', m.text_patterns);
+  setScore('bar-img', 'val-img', m.image_manip);
+  setScore('bar-cross', 'val-cross', m.cross_modal);
+  setScore('bar-overall', 'val-overall', m.overall);
+
+  showScreen('results');
+}
+
+async function analyze() {
+  const text = document.getElementById('articleText').value.trim();
+  if (!text) { showError(isArabic ? 'الرجاء إدخال نص الخبر' : 'Please enter article text'); return; }
+  if (!selectedFile) { showError(isArabic ? 'الرجاء رفع صورة' : 'Please upload an image'); return; }
+  document.getElementById('errorBox').style.display = 'none';
+
+  showScreen('loading');
+  resetLoading();
+
+  const loadingAnim = animateLoading();
+
+  const formData = new FormData();
+  formData.append('text', text);
+  formData.append('image', selectedFile);
+
+  try {
+    const resp = await fetch('/api/analyze', { method: 'POST', body: formData });
+    const data = await resp.json();
+
+    await loadingAnim;
+    await new Promise(r => setTimeout(r, 500));
+
+    if (data.error) {
+      showScreen('submit');
+      showError(data.error);
+      return;
+    }
+    showResults(data);
+  } catch (e) {
+    await loadingAnim;
+    showScreen('submit');
+    showError(isArabic ? 'خطأ في الاتصال بالخادم' : 'Failed to connect to server: ' + e.message);
+  }
+}
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  box.textContent = msg;
+  box.style.display = 'block';
+}
+
+function toggleLang() {
+  isArabic = !isArabic;
+  document.getElementById('app').setAttribute('dir', isArabic ? 'rtl' : 'ltr');
+  document.getElementById('langBtn').textContent = isArabic ? 'EN' : 'AR';
+  document.getElementById('heroTitle').textContent = isArabic ? 'تحقّق من أي خبر' : 'Verify Any News Article';
+  document.getElementById('heroSub').textContent = isArabic
+    ? 'ارفع نص الخبر وصورته لاكتشاف المحتوى المولَّد بالذكاء الاصطناعي والصور المعدَّلة والاستخدام خارج السياق.'
+    : 'Upload text and an image to detect AI-generated content, manipulated images, and out-of-context pairings in seconds.';
+  document.getElementById('textLabel').textContent = isArabic ? 'نص الخبر' : 'Article Text';
+  document.getElementById('imageLabel').textContent = isArabic ? 'صورة الخبر' : 'Article Image';
+  document.getElementById('submitBtn').textContent = isArabic ? 'حلِّل الخبر' : 'Analyze Article';
+  document.getElementById('articleText').placeholder = isArabic ? 'ألصق نص الخبر هنا...' : 'Paste the article text here...';
+  document.getElementById('loadingTitle').textContent = isArabic ? 'جارٍ تحليل الخبر...' : 'Analyzing your submission...';
+  document.getElementById('loadingSub').textContent = isArabic ? 'تشغيل وحدات الكشف' : 'Running detection modules';
+  document.getElementById('verdictLabel').textContent = isArabic ? 'النتيجة' : 'Verdict';
+  document.getElementById('scoresTitle').textContent = isArabic ? 'تفصيل الوحدات' : 'Module Breakdown';
+}
+</script>
+</body>
+</html>
