@@ -59,6 +59,7 @@ are fake-text/fake-image predicted as real-text/fake-image (46), out-of-context 
 - **Single seed (42).** Treat this as the current experiment result, not a final robustness
   estimate. Differences of about 0.01 between runs should not be read as meaningful without repeated
   seeds.
-- The trained fusion checkpoint is not yet connected to runtime inference or the dashboard
-  ([DASHBOARD.md](DASHBOARD.md)).
+- The dashboard can load this checkpoint through `dashboard.v3_fusion:load_fusion`
+  ([DASHBOARD.md](DASHBOARD.md)); a full live end-to-end run has not been documented yet.
+- The checkpoint (`best.pt`) is not tracked in Git.
 - `fusion-training-features.npz` and the test feature file are not in this repository.

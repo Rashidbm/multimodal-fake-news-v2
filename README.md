@@ -18,7 +18,7 @@ reproducibility but is not part of the pipeline and is not required to run it.
 
 - [Qwen3-VL-Embedding semantic experiment](docs/SEMANTIC_QWEN_EXPERIMENT.md) (results, caveats, reproduction)
 - [Fusion results](docs/FUSION_RESULTS.md) (`fnd.train_fusion`, single-seed results)
-- [Dashboard](docs/DASHBOARD.md) (live branches; the trained fusion model is not yet connected)
+- [Dashboard](docs/DASHBOARD.md) (live branches; five-class verdict via the V3 fusion plugin when a checkpoint is supplied)
 
 ## Setup
 

@@ -25,7 +25,7 @@ Open http://127.0.0.1:8000.
 | Devices | `--branch-device`, `--text-device` | semantic/image on the first GPU, text on the second if two GPUs exist |
 | Text layer / length | `--text-layer 30`, `--text-max-len 64` | must match the cached training features |
 | Skip text | `--no-text` | the fusion then cannot run |
-| Fusion model | `--fusion package.module:factory` | see the `dashboard/server.py` docstring |
+| Fusion model | `--fusion dashboard.v3_fusion:load_fusion` | see the Fusion plugin section; any `package.module:factory` works |
 
 The trained weights must be extracted into `models/semantic/` and `models/image/` as described in the
 README.
@@ -38,20 +38,43 @@ README.
 | Image | image only | `v_imgfor [1, 768]`, image fake probability |
 | Text | caption only | `v_textfor [1, 4096]` (Qwen3.5-9B layer 30, masked mean) |
 
+## Fusion plugin (five-class verdict)
+
+`dashboard/v3_fusion.py` plugs the trained V3 fusion checkpoint (the `best.pt` written by
+`fnd.train_fusion`, see [FUSION_RESULTS.md](FUSION_RESULTS.md)) into the dashboard:
+
+```text
+python -m dashboard.server --fusion dashboard.v3_fusion:load_fusion
+```
+
+| Item | Detail |
+|---|---|
+| Checkpoint path | `FUSION_CHECKPOINT` environment variable; default `outputs/fusion_v3/best.pt` |
+| Inputs | semantic `[1, 768]`, image `[1, 768]`, text `[1, 4096]` |
+| Output | softmax of `main_logits`, `[1, 5]`, in the checkpoint's class order (`fnd.train_fusion.CLASSES`) |
+| Loading | `weights_only=True` and strict `load_state_dict` into `V3FusionModule`; a missing file raises an error that names `FUSION_CHECKPOINT` |
+| Needs | the text branch (do not pass `--no-text`) |
+
+Example (PowerShell): `$env:FUSION_CHECKPOINT = "D:\models\fusion\best.pt"`.
+
+- **With a valid checkpoint**, the dashboard returns the real five-class fused verdict and class
+  probabilities, and "overall" risk is `1 - P(genuine)`.
+- **Without `--fusion`**, the three branches still run independently and the verdict reads **"Final
+  prediction pending"**; no prediction is invented.
+
+The checkpoint is a training artifact and is not tracked in Git. The plug is unit-tested with a
+synthetic checkpoint (`fnd/tests/test_dashboard_fusion.py`). A full live end-to-end run of the
+dashboard with the real checkpoint and all three branches has **not** been verified in this repository's
+documentation yet.
+
 ## What works
 
 - The three branches run live on an uploaded image and text and return their scores and feature
   dimensions.
 - The page shows the image-branch score, the BLIP mismatch score and, as overall risk, the semantic
   branch's pair fake score.
-- Fusion hook: a factory passed with `--fusion` is run on the three vectors and its five-class
-  probabilities are shown.
 
 ## What is not wired
 
-- **No trained fusion checkpoint is connected.** Without `--fusion`, the verdict reads **"Final
-  prediction pending"**, the class probabilities stay empty and `final_available` is false. No
-  prediction is invented. The checkpoint from [FUSION_RESULTS.md](FUSION_RESULTS.md) still needs a
-  runtime factory.
+- The fusion checkpoint is not shipped with the repository; supply it as described above.
 - The text AI-authorship and text-pattern rows stay empty: the text branch yields features only.
-- End-to-end inference through the fused model is therefore not yet available.
