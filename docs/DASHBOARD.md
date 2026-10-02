@@ -3,7 +3,67 @@
 `dashboard/` is a FastAPI web backend that runs the semantic, image and text branches live behind
 the semester-1 web interface. The CLIP-L semantic model is used; Qwen3-VL-Embedding is not involved.
 
-## Start
+## Quick Start — Training PC demo
+
+Verified on the Training PC (2 x RTX 4090, system Python 3.13.7, no venv; dependencies are installed
+globally and `HF_HOME` is already set to `D:\hf_cache` at user level).
+
+```powershell
+cd C:\Users\497-MultiGuard\Desktop\Multiguard_windows_demo\multimodal-fake-news-v2
+
+$env:FUSION_CHECKPOINT   = "D:\MultiGuard\fusion\outputs\v3_clip_semantic\best.pt"
+$env:MULTIGUARD_TEXT_MODEL = "D:\models\Qwen3.5-9B"
+
+python -m dashboard.server --fusion dashboard.v3_fusion:load_fusion
+```
+
+Wait for `Open http://127.0.0.1:8000` (about 20 s to load), then open **http://127.0.0.1:8000**
+(`--host` / `--port` change it).
+
+**Confirm the fusion is active** in the console before the "ready" line:
+
+```text
+fusion checkpoint D:\MultiGuard\fusion\outputs\v3_clip_semantic\best.pt (epoch 8, val macro-F1 0.8428)
+```
+
+or open http://127.0.0.1:8000/api/health and check `"final_available": true`.
+
+**Try a sample:** paste a caption into the text box, upload an image (samples are in
+`dashboard/static/images/`), click **Analyze Article**. Expected: a verdict card with one of five
+classes (Real, Out-of-Context, Manipulated, Fake/Edited Text, Fully Fabricated), the class
+probabilities, and the module scores (image manipulation, cross-modal mismatch, overall risk).
+Takes about 1-2 s per request after loading. If `final_available` is false the page shows
+"Final prediction pending" instead of a verdict.
+
+First-time setup only, if packages are missing:
+`pip install -r requirements-semantic.txt -r requirements-forensic.txt -r requirements-dashboard.txt`
+(the model weights must be in `models/semantic/` and `models/image/`, see the README).
+
+### Required models / checkpoints
+
+| Component | Path / source | How configured |
+|---|---|---|
+| Fusion checkpoint | `D:\MultiGuard\fusion\outputs\v3_clip_semantic\best.pt` | `FUSION_CHECKPOINT` (default `outputs/fusion_v3/best.pt`, which does not exist) |
+| Text branch (Qwen3.5-9B) | `D:\models\Qwen3.5-9B` | `MULTIGUARD_TEXT_MODEL` or `--text-model`; required, no default |
+| Semantic branch (CLIP-L) | `models/semantic/bundle.json` in the repo | `--semantic-bundle` (automatic) |
+| Image branch | `models/image/news/bundle.json` in the repo | `--image-bundle` (automatic) |
+| HF caches (BLIP, CLIP) | `D:\hf_cache` | `HF_HOME`; the server runs offline and never downloads |
+
+The text model is Qwen3.5-9B (text forensics). The Qwen3-VL-Embedding semantic experiment is not
+used and not required.
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `Set MULTIGUARD_TEXT_MODEL (or pass --text-model)...` | Set the text-model variable, or pass `--no-text` (the fusion then cannot run) |
+| `FileNotFoundError: fusion checkpoint ... not found: set FUSION_CHECKPOINT` | The variable is unset in this PowerShell window (it is per-session) or the path is wrong |
+| `Error(s) in loading state_dict` / missing keys | Wrong checkpoint format. `MultiGuard_FUSION_READY\outputs\fusion_meeting\best.pt` is an older format and does not load; use the file above |
+| `A model is missing from ...hub` | `HF_HOME` not set to `D:\hf_cache` (`$env:HF_HOME = "D:\hf_cache"`) or the cache is incomplete |
+| `ModuleNotFoundError: fastapi / multipart` | Install `requirements-dashboard.txt` |
+| `address already in use` | Another server holds port 8000: stop it or pass `--port 8001` |
+
+## Generic start (without fusion)
 
 ```text
 pip install -r requirements-semantic.txt -r requirements-forensic.txt -r requirements-dashboard.txt
