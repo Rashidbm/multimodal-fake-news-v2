@@ -19,6 +19,7 @@ reproducibility but is not part of the pipeline and is not required to run it.
 - [Qwen3-VL-Embedding semantic experiment](docs/SEMANTIC_QWEN_EXPERIMENT.md) (results, caveats, reproduction)
 - [Fusion results](docs/FUSION_RESULTS.md) (`fnd.train_fusion`, single-seed results)
 - [Dashboard](docs/DASHBOARD.md) (live branches; five-class verdict via the V3 fusion plugin when a checkpoint is supplied)
+- [Local fact-checking branch](docs/FACT_CHECKING_IMPLEMENTATION.md) (Gemma 4 31B FP8 + SearXNG retrieval; separate from the fusion, no accuracy measured yet)
 
 ### Run the Demo
 

@@ -1,0 +1,9 @@
+# Fact-checking branch client (src/factcheck, app/factcheck_server.py).
+# The model and search run in Docker (deploy/factcheck/compose.yaml); no torch needed here.
+httpx>=0.27,<1
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+pytest>=8
+# Optional: only for prepare-mmfake on Hugging Face Arrow caches instead of the JSON files.
+# pyarrow>=15

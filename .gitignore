@@ -19,3 +19,6 @@ features/
 *.log
 outputs/
 *.npz
+
+# Fact-checking backends: generated secret + model revision (model.lock is committed)
+deploy/factcheck/.env
