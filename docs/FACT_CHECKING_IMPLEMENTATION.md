@@ -106,6 +106,7 @@ Run software tests with `python -m pytest tests/factcheck -q`.
 | `app/factcheck_server.py` | Upload API |
 | `deploy/factcheck/` | Compose file, SearXNG settings, client environment |
 | `scripts/start_factcheck_local.sh`, `scripts/run_factcheck_pilot.sh` | Start backends; run the four comparisons and the comparison report |
+| `scripts/run_mmfake_factcheck.sh ROOT [val-smoke\|test-pilot]` | All of the above in one command: start, wait for the model, doctor, manifest, pilot |
 
 **Model revision pin.** The Compose file serves the model at `FACTCHECK_MODEL_REVISION`. On first start, `start_factcheck_local.sh` resolves the current Hugging Face commit of `RedHatAI/gemma-4-31B-it-FP8-dynamic`, writes it to `deploy/factcheck/model.lock`, and reuses that file afterwards. Commit `model.lock` so every run and machine serves the same weights. Image digests are pinned in `compose.yaml`: `vllm/vllm-openai:v0.30.0` and `searxng/searxng:2026.10.2-19ffbcd30`. The chat template is the Gemma 4 tool template shipped inside the pinned vLLM image. vLLM listens on `127.0.0.1:8010`, so it does not collide with the dashboard on port 8000. SearXNG listens on `127.0.0.1:8888`.
 
