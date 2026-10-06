@@ -11,6 +11,7 @@ evaluation; the fusion inputs are the feature vectors.
 
 Read [semantic documentation](docs/SEMANTIC_BRANCH.md) and
 [image documentation](docs/IMAGE_BRANCH.md) for training, model files and metrics.
+The image-truth mapping for the next Image Branch is in [docs/IMAGE_DATA_MAPPING.md](docs/IMAGE_DATA_MAPPING.md).
 
 **Architecture status.** CLIP-L is the selected, default semantic model. Qwen3-VL-Embedding was
 evaluated as an alternative and scored lower overall; that experiment is preserved for

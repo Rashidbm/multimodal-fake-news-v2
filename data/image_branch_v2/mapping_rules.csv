@@ -1,0 +1,30 @@
+source,subcategory,rule,final_image_truth,confidence,required_size,domain,reason
+mmfakebench,DGM4_text_edit_senti,MMFB_TEXT_EDIT_REAL_IMAGE,REAL,high,,news,Only the caption is antonym-edited; the DGM4 original image is untouched
+mmfakebench,Fakeddit_photo_edit,MMFB_PHOTO_EDIT_MANIPULATED,MANIPULATED,medium-high,,fakeddit,PS-edited Fakeddit 'manipulated content' (paper 3.1.2); composites at native sizes 280-5285 px
+mmfakebench,Newsclipings_person,MMFB_OOC_REAL,REAL,high,,news,"Out-of-context: image untouched, caption mismatched"
+mmfakebench,Newsclipings_scene,MMFB_OOC_REAL,REAL,high,,news,"Out-of-context: image untouched, caption mismatched"
+mmfakebench,Newsclipings_semantic,MMFB_OOC_REAL,REAL,high,,news,"Out-of-context: image untouched, caption mismatched"
+mmfakebench,antifact_image_generation,MMFB_ANTIFACT_AI,AI_GENERATED,high,1024x1024,news,"Fully generated image (paper 3.1.2), 1024x1024, Midjourney-like style; generator not recorded. Other sizes are excluded"
+mmfakebench,bbc,MMFB_GENUINE_REAL,REAL,high,,news,Paper section 3.2 real data (VisualNews source)
+mmfakebench,chatgpt_match,MMFB_FAKE_TEXT_REAL_IMAGE,REAL,high,,news,Fake text on a repurposed real VisualNews photo; the image is untouched
+mmfakebench,coco,MMFB_GENUINE_REAL,REAL,high,,coco,Paper section 3.2 real MS-COCO photo
+mmfakebench,coco_image_edit,MMFB_COCO_CF_AI,AI_GENERATED,medium-high,512x512,coco,COCO-Counterfactuals image: uniform 512x512 (real COCO here is 640x480 etc.) and visually diffusion-generated; not an edit of a real photo
+mmfakebench,coco_text_edit,MMFB_COCO_CF_AI,AI_GENERATED,medium-high,512x512,coco,COCO-Counterfactuals image: uniform 512x512 (real COCO here is 640x480 etc.) and visually diffusion-generated; not an edit of a real photo
+mmfakebench,fakeddit,MMFB_GENUINE_REAL,REAL,medium-high,,fakeddit,"Paper section 3.2 real Fakeddit image (user phone photos, memes)"
+mmfakebench,fever_AI,MMFB_FEVER_AI,AI_GENERATED,high,1024x1024,news,"Generated support image (paper 3.1.1: SDXL, DALL-E 3, Midjourney V6); 15 PNGs carry sd_xl_base_1.0 metadata"
+mmfakebench,gossipcop_match,MMFB_FAKE_TEXT_REAL_IMAGE,REAL,high,,news,Fake text on a repurposed real VisualNews photo; the image is untouched
+mmfakebench,gossipcop_midjourney,MMFB_MIDJOURNEY_AI,AI_GENERATED,high,1024x1024,news,"Named Midjourney V6 image, 1024x1024"
+mmfakebench,guardian,MMFB_GENUINE_REAL,REAL,high,,news,Paper section 3.2 real data (VisualNews source)
+mmfakebench,llm_gossip_md_generation,MMFB_LLM_AI,AI_GENERATED,high,1024x1024,news,"Generated image paired with a GPT rumor (paper 3.1.1), 1024x1024"
+mmfakebench,llm_rewrite,MMFB_LLM_AI,AI_GENERATED,high,1024x1024,news,"Generated image paired with a GPT rumor (paper 3.1.1), 1024x1024"
+mmfakebench,llm_science_md_generation,MMFB_LLM_AI,AI_GENERATED,high,1024x1024,news,"Generated image paired with a GPT rumor (paper 3.1.1), 1024x1024"
+mmfakebench,politicat_match,MMFB_FAKE_TEXT_REAL_IMAGE,REAL,high,,news,Fake text on a repurposed real VisualNews photo; the image is untouched
+mmfakebench,rumor_match,MMFB_FAKE_TEXT_REAL_IMAGE,REAL,high,,news,Fake text on a repurposed real VisualNews photo; the image is untouched
+mmfakebench,usa_today,MMFB_GENUINE_REAL,REAL,high,,news,Paper section 3.2 real data (VisualNews source)
+mmfakebench,wash,MMFB_GENUINE_REAL,REAL,high,,news,Paper section 3.2 real data (VisualNews source)
+newsclippings,(none),NC_PAIRED_REAL,REAL,high,,news,"Official NewsCLIPpings pair; falsified=true only means the caption is mismatched, the image is authentic"
+newsclippings,bbc,NC_SUPPLEMENT_REAL,REAL,high,,news,Supplementary matched NewsCLIPpings image (genuine)
+newsclippings,guardian,NC_SUPPLEMENT_REAL,REAL,high,,news,Supplementary matched NewsCLIPpings image (genuine)
+newsclippings,usa_today,NC_SUPPLEMENT_REAL,REAL,high,,news,Supplementary matched NewsCLIPpings image (genuine)
+newsclippings,washington_post,NC_SUPPLEMENT_REAL,REAL,high,,news,Supplementary matched NewsCLIPpings image (genuine)
+mmfakebench,(size check fails),EXCLUDED_SIZE_MISMATCH,EXCLUDE,low,,,Group is normally AI-generated but this image does not have the group's generated size; likely an AI-edited real photo or another tool
