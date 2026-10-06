@@ -103,3 +103,20 @@ def test_dino_feature_layout_with_a_tiny_random_model():
     features = encoder.cat(encoder.features([noise_image(224, 224, i) for i in range(2)]))
     assert features.shape == (2, 2 * len(encoder.layers) * 32)
     assert [n for n, _ in encoder.blocks][:2] == [f"cls_L{encoder.layers[0]}", f"mean_L{encoder.layers[0]}"]
+
+
+def test_export_bundle_writes_a_checked_bundle(tmp_path):
+    import json
+    from fnd.imagev2.infer import export_bundle, sha256_file
+    root = tmp_path / "image_branch_v2"
+    run = root / "runs" / "B1_main_lam0_s1"
+    run.mkdir(parents=True)
+    (root / "features" / "B1_dinov2").mkdir(parents=True)
+    head = ImageHead(16, hidden=8)
+    torch.save(dict(model=head.state_dict(), config={}), run / "checkpoint.pt")
+    (run / "config.json").write_text(json.dumps(dict(hidden=8, dropout=0.2, lambda_aux=0.0, seed=1)))
+    (run / "metrics.json").write_text(json.dumps(dict(selection=dict(best_val_worst_domain_bacc=0.9, best_epoch=2))))
+    (root / "features" / "B1_dinov2" / "meta.json").write_text(json.dumps(dict(dim=16, manifest_sha256="x", provenance=dict(revision="r", layers=[1, 2, 3, 4]))))
+    bundle = export_bundle(run, tmp_path / "out")
+    assert bundle["feature_dimension"] == 768 and bundle["threshold"] == 0.5 and bundle["head"]["in_dim"] == 16
+    assert bundle["head"]["sha256"] == sha256_file(tmp_path / "out" / "head.pt")

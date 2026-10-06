@@ -32,7 +32,7 @@ from .model import ImageHead
 from .sampler import DomainClassSampler
 
 DEFAULTS = dict(epoch_size=4096, batch_size=128, lr=5e-4, weight_decay=1e-2, patience=8, max_epochs=60, hidden=1024, dropout=0.2, label_smoothing=0.1)
-BASE_ARMS = {"A0": "A1", "A1": "A1", "A1s": "A1s", "B1": "B1"}
+BASE_ARMS = {"A0": "A1", "A1": "A1", "A1s": "A1s", "B1": "B1_dinov2", "B1_dinov3": "B1_dinov3"}
 
 
 def load_features(root, arm):
