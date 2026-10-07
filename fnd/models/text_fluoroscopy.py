@@ -32,6 +32,14 @@ class TextFluoroscopyConfig:
     proj_dim: int = 768           # must match v_semantic / v_imgfor
     dtype: str = "auto"           # auto | bfloat16 | float16 | float32
     pretrained: bool = True       # False = tiny random Qwen2, used by the unit tests
+    # e.g. "12GiB": fill the GPU up to this, keep the remaining layers in CPU RAM
+    # (accelerate streams them to the GPU per forward, so compute stays bf16 on GPU).
+    # None = whole model on one device, as before.
+    max_gpu_memory: str | None = None
+    # Leave the BOS token out of the mean. Qwen adds no BOS; Mistral/Llama do, and
+    # their BOS carries huge "attention sink" activations that would otherwise
+    # dominate the mean by an amount that depends on caption length.
+    pool_skip_bos: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +187,12 @@ class TextFluoroscopy(nn.Module):
             self.tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
             # AutoModel, not AutoModelForCausalLM: no vocabulary logits are
             # needed, so the LM head is never loaded.
-            self.model = AutoModel.from_pretrained(cfg.model_name, torch_dtype=self.dtype)
+            if cfg.max_gpu_memory and self.device.type == "cuda":
+                self.model = AutoModel.from_pretrained(
+                    cfg.model_name, torch_dtype=self.dtype, device_map="auto",
+                    max_memory={self.device.index or 0: cfg.max_gpu_memory, "cpu": "28GiB"})
+            else:
+                self.model = AutoModel.from_pretrained(cfg.model_name, torch_dtype=self.dtype)
         else:
             # Tiny randomly initialised Qwen2 with the same API, for the tests.
             from transformers import Qwen2Config, Qwen2Model
@@ -195,7 +208,12 @@ class TextFluoroscopy(nn.Module):
                 self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.padding_side = "right"
 
-        self.model.to(self.device).eval()
+        if getattr(self.model, "hf_device_map", None) is None:
+            self.model.to(self.device)            # device_map loads are already placed
+        self.model.eval()
+        self.bos_id = None
+        if cfg.pool_skip_bos and self.tokenizer is not None:
+            self.bos_id = self.tokenizer.bos_token_id
         for p in self.model.parameters():
             p.requires_grad = False       # frozen: feature extraction only
 
@@ -228,12 +246,29 @@ class TextFluoroscopy(nn.Module):
     def projection(self) -> TextForensicProjection:
         return TextForensicProjection(self.hidden_size, self.cfg.proj_dim)
 
+    def pool_mask(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """The attention mask, minus BOS positions when pool_skip_bos is set.
+        The model still attends to BOS; it is only left out of the mean."""
+        if self.bos_id is None:
+            return attention_mask
+        return attention_mask * (input_ids != self.bos_id).to(attention_mask.dtype)
+
     @torch.no_grad()
     def encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """One forward pass -> pooled (B, hidden_size)."""
         out = self.model(input_ids=input_ids, attention_mask=attention_mask,
                          output_hidden_states=True)
-        return masked_mean_pool(out.hidden_states[self.layer], attention_mask)
+        return masked_mean_pool(out.hidden_states[self.layer],
+                                self.pool_mask(input_ids, attention_mask))
+
+    @torch.no_grad()
+    def encode_all_layers(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """One forward pass -> pooled (num_layers + 1, B, hidden_size), index 0 = embeddings."""
+        out = self.model(input_ids=input_ids, attention_mask=attention_mask,
+                         output_hidden_states=True)
+        mask = self.pool_mask(input_ids, attention_mask)
+        return torch.stack([masked_mean_pool(h, mask.to(h.device)).to(self.device)
+                            for h in out.hidden_states])
 
     @torch.no_grad()
     def encode_texts(self, texts: list[str]) -> tuple[torch.Tensor, list[int]]:
@@ -250,6 +285,18 @@ class TextFluoroscopy(nn.Module):
                              max_length=self.cfg.max_len, return_tensors="pt")
         enc = {k: v.to(self.device) for k, v in enc.items()}
         return self.encode(enc["input_ids"], enc["attention_mask"]), lengths
+
+    @torch.no_grad()
+    def encode_texts_all_layers(self, texts: list[str]) -> tuple[torch.Tensor, list[int]]:
+        """encode_texts, but every layer: (num_layers + 1, B, H) + token lengths."""
+        if self.tokenizer is None:
+            raise RuntimeError("no tokenizer: this instance was built with pretrained=False")
+        lengths = [len(x) for x in self.tokenizer(texts, padding=False,
+                                                  truncation=False)["input_ids"]]
+        enc = self.tokenizer(texts, padding=True, truncation=True,
+                             max_length=self.cfg.max_len, return_tensors="pt")
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+        return self.encode_all_layers(enc["input_ids"], enc["attention_mask"]), lengths
 
     def describe(self) -> str:
         note = "" if self.config_agrees else "  [config reports different dims - measured wins]"

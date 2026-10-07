@@ -1,0 +1,16 @@
+{
+  "criterion": "max val AUC",
+  "seed": 42,
+  "chosen": "layer_24",
+  "val": {
+    "layer": "layer_24",
+    "auc": 0.9632355231598293,
+    "f1": 0.825147347740668,
+    "balanced_accuracy": 0.8862162414727596,
+    "accuracy": 0.900946021146355,
+    "precision": 0.7984790874524715,
+    "recall": 0.8536585365853658,
+    "threshold": 0.45
+  },
+  "test_touched": false
+}

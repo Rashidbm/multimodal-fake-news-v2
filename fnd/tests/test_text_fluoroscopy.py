@@ -122,6 +122,27 @@ def test_padding_does_not_change_a_row(tiny):
     assert torch.allclose(alone, padded, atol=1e-4)
 
 
+def test_all_layers_matches_single_layer(tiny):
+    """encode_all_layers()[layer] is exactly what encode() returns for that layer."""
+    ids = torch.randint(1, 200, (2, 9), device=tiny.device)
+    mask = torch.ones(2, 9, dtype=torch.long, device=tiny.device)
+    mask[1, 5:] = 0
+    every = tiny.encode_all_layers(ids, mask)
+    assert every.shape == (tiny.num_layers + 1, 2, tiny.hidden_size)
+    assert torch.allclose(every[tiny.layer], tiny.encode(ids, mask), atol=1e-6)
+
+
+def test_pool_skip_bos_drops_only_bos(tiny):
+    ids = torch.tensor([[1, 5, 6, 0]], device=tiny.device)
+    mask = torch.tensor([[1, 1, 1, 0]], device=tiny.device)
+    assert tiny.pool_mask(ids, mask).tolist() == [[1, 1, 1, 0]]   # off by default
+    tiny.bos_id = 1
+    try:
+        assert tiny.pool_mask(ids, mask).tolist() == [[0, 1, 1, 0]]
+    finally:
+        tiny.bos_id = None
+
+
 def test_dims_are_measured_from_a_forward_pass(tiny):
     """hidden_size and num_layers come from a real forward pass, not the config.
 
