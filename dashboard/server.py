@@ -99,7 +99,9 @@ def parse_args(argv=None):
     ap.add_argument('--semantic-bundle', default=str(ROOT/'models/semantic/bundle.json'))
     ap.add_argument('--image-bundle', default=str(ROOT/'models/image/news/bundle.json'),
                     help='news (edited or AI-generated), broad, or ai bundle')
-    ap.add_argument('--text-model', default=os.environ.get('MULTIGUARD_TEXT_MODEL', r'D:\models\Qwen3.5-9B'))
+    ap.add_argument('--text-model', default=os.environ.get('MULTIGUARD_TEXT_MODEL'),
+                    help='Qwen3.5-9B text-branch model: local directory or Hugging Face id '
+                         '(or set MULTIGUARD_TEXT_MODEL). Required unless --no-text')
     ap.add_argument('--text-layer', type=int, default=30)
     ap.add_argument('--text-max-len', type=int, default=64, help='must match the cached training features')
     ap.add_argument('--no-text', action='store_true', help='skip Qwen (the fusion then cannot run)')
@@ -248,6 +250,9 @@ def create_app(pipeline):
 def main(argv=None):
     import uvicorn
     args = parse_args(argv)
+    if not args.no_text and not args.text_model:
+        raise SystemExit('Set MULTIGUARD_TEXT_MODEL (or pass --text-model) to the Qwen3.5-9B text-branch '
+                         'model, or pass --no-text.')
     try:
         pipeline = Pipeline(args)
     except OSError as e:

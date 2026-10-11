@@ -14,6 +14,20 @@ Read [semantic documentation](docs/SEMANTIC_BRANCH.md) and
 [Fusion and dashboard](docs/Qwen3VL_FUSION.md) covers the CLIP-L vs Qwen3-VL-Embedding
 comparison, fusion training and results, and the web dashboard.
 
+**Architecture status.** CLIP-L is the selected, default semantic model. Qwen3-VL-Embedding was
+evaluated as an alternative and scored lower overall; that experiment is preserved for
+reproducibility but is not part of the pipeline and is not required to run it.
+
+- [Qwen3-VL-Embedding semantic experiment](docs/SEMANTIC_QWEN_EXPERIMENT.md) (results, caveats, reproduction)
+- [Fusion results](docs/FUSION_RESULTS.md) (`fnd.train_fusion`, single-seed results)
+- [Dashboard](docs/DASHBOARD.md) (live branches; five-class verdict via the V3 fusion plugin when a checkpoint is supplied)
+
+### Run the Demo
+
+See [docs/DASHBOARD.md](docs/DASHBOARD.md) for the Training PC quick-start and required model paths
+(CLIP-L semantic branch, Qwen3.5-9B text branch, V3 fusion checkpoint via `dashboard.v3_fusion:load_fusion`;
+the Qwen3-VL-Embedding experiment is not used).
+
 ## Setup
 
 ```text

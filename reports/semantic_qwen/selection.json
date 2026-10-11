@@ -1,0 +1,40 @@
+{
+  "third": "qwen_embedding",
+  "kind": "blip_v1_qwen_embedding",
+  "selected": "extra1_ooc0.125_c0.01",
+  "threshold": 0.241064846540872,
+  "artifact": "extra1_ooc0.125_c0.01.joblib",
+  "artifact_sha256": "d213c5952ef9456653898b3016ecae39d2f53f1659981f0bd8cee37626bc8553",
+  "feature_dim": 5634,
+  "csv_sha256": "83fb7894e627d7ecd30b604c6a8f997ea09629c033078b31a804937dfa786ccc",
+  "test_used": false,
+  "caches": {
+    "blip": "da7b864b15ed6eaef1fc2f629c55609824abeb8fee17e7daef63958e05c22f3c",
+    "v1": "6b5be1bd539490b236429d5c04fa5a4387900f166bb0a2f52066444acb7c73f6",
+    "third": "78b88293a3cdf6d34df3e912729ffccf4f56d81e4311d61f58f35bee18d165ed"
+  },
+  "reference": "none (common new split)",
+  "third_provenance": {
+    "csv_sha256": "83fb7894e627d7ecd30b604c6a8f997ea09629c033078b31a804937dfa786ccc",
+    "splits": [
+      "train",
+      "val"
+    ],
+    "embedding_dim": 4096,
+    "batch_size": 1,
+    "shard": null,
+    "feature_kind": "qwen3_vl_embedding",
+    "model_name": "2c4565515e0f265c6511776e7193b22c0968ddc7",
+    "model_config_sha256": "1eaa88d8d8824a47304e864c14101fe9efe3286607a7573f27eb723637f0d73d",
+    "embedder_script_sha256": "8ffa74a1a6bb759610c57865ea416fd4daf9936cb787520e1112a3e1d547f36a",
+    "instruction": "Represent the user's input.",
+    "min_pixels": 4096,
+    "max_pixels": 1843200,
+    "dtype": "bfloat16",
+    "normalized": true,
+    "merged_from": [
+      "7010413ff9b46c2e21e8c80bf2b17a56287f2cd7f2a2ebf7acbdc33744aca7b9",
+      "d10d0fad9a11a6730f31b99afaf5c38f40cc8f9f997b1f6201d2b91ab03bce0a"
+    ]
+  }
+}
