@@ -12,7 +12,7 @@ Outputs (a dict):
   aux_logits  [B, 2]     image real/fake; only used for the training loss
   fused       [B, 1024]  the combined vector, for debugging
 
-The 7 steps (same as slide 14):
+The 7 steps:
   1. Text projection: shrink v_textfor from 4096 to 768, so all three match.
   2. LayerNorm: put each vector on the same scale.
   3. Tokenize: turn each vector into 8 tokens.
