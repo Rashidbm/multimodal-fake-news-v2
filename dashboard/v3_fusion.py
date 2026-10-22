@@ -20,14 +20,21 @@ class V3Fusion:
     """Callable the dashboard expects: classes + (semantic, image, text) -> probabilities [1, 5]."""
 
     def __init__(self, model, classes):
-        self.model, self.classes = model.eval(), list(classes)
+        self.model = model.eval()       # eval mode: no dropout, BatchNorm uses its saved stats
+        self.classes = list(classes)    # class names, in the same order as the 5 outputs
 
     def __call__(self, semantic, image, text):
+        # Only the main 5-class scores are shown; softmax turns them into probabilities.
         with torch.inference_mode():
             return self.model(semantic, image, text)['main_logits'].softmax(-1)
 
 
 def load_fusion(device, checkpoint=None):
+    """Build V3FusionModule, load the trained weights and wrap it for the dashboard.
+
+    The path is chosen in this order: the checkpoint argument, then FUSION_CHECKPOINT,
+    then DEFAULT_CHECKPOINT.
+    """
     path = Path(checkpoint or os.environ.get('FUSION_CHECKPOINT', DEFAULT_CHECKPOINT))
     if not path.is_file():
         raise FileNotFoundError(f'fusion checkpoint {path} not found: set FUSION_CHECKPOINT to the '
