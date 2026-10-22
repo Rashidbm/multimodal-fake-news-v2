@@ -40,7 +40,8 @@ class VectorTokenizer(nn.Module):
     """Step 3: turn one vector [B, 768] into 8 tokens [B, 8, 768].
 
     A learned layer makes 8 different views of the vector, and a position
-    embedding keeps the 8 tokens different from each other.
+    embedding keeps the 8 tokens different from each other. The sizes are
+    the defaults; dim and num_tokens can be changed.
     """
 
     def __init__(self, dim: int = 768, num_tokens: int = 8):
@@ -129,9 +130,10 @@ class ThreeWayFusion(nn.Module):
         self.pair_img_text = PairwiseCrossAttention(feat_dim, num_heads, attn_dropout)
 
         # Step 5: 1D-conv that slides across the 3 pair results.
+        # The 768 features are the channels and the 3 pairs are the positions.
         self.conv1 = nn.Conv1d(
             in_channels=feat_dim, out_channels=feat_dim,
-            kernel_size=3, padding=1,   # looks at all 3 pairs together
+            kernel_size=3, padding=1,   # each pair is mixed with its neighbours
         )
         self.conv2 = nn.Conv1d(
             in_channels=feat_dim, out_channels=fused_dim,
@@ -162,7 +164,8 @@ class ThreeWayFusion(nn.Module):
         r2 = self.pair_sem_text(s_tok, t_tok)
         r3 = self.pair_img_text(i_tok, t_tok)
 
-        # Step 5: line the 3 results up [B, 768, 3], conv, then average -> [B, 1024].
+        # Step 5: stack the 3 results [B, 3, 768], swap to [B, 768, 3] because
+        # Conv1d wants channels first, conv, then average the 3 positions -> [B, 1024].
         x = torch.stack([r1, r2, r3], dim=1).permute(0, 2, 1)
         x = self.conv2(self.act(self.conv1(x)))
         return self.pool(x).squeeze(-1)
@@ -187,6 +190,7 @@ class V3Classifier(nn.Module):
         )
 
     def forward(self, fused: torch.Tensor) -> torch.Tensor:
+        """fused: [B, 1024] -> class scores: [B, 5]"""
         return self.net(fused)
 
 
@@ -234,6 +238,7 @@ class V3FusionModule(nn.Module):
         v_imgfor: torch.Tensor,
         v_textfor: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
+        """Three branch vectors -> dict with main_logits, aux_logits and fused."""
         fused = self.fusion(v_semantic, v_imgfor, v_textfor)
         main_logits = self.classifier(fused)
         # detach(): the aux loss trains only the aux head, nothing else.
